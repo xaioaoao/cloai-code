@@ -1,0 +1,1614 @@
+import { c as _c } from "react/compiler-runtime";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
+import { installOAuthTokens } from '../cli/handlers/auth.js';
+import { useTerminalSize } from '../hooks/useTerminalSize.js';
+import { setClipboard } from '../ink/termio/osc.js';
+import { useTerminalNotification } from '../ink/useTerminalNotification.js';
+import { Box, Link, Text } from '../ink.js';
+import { useKeybinding } from '../keybindings/useKeybinding.js';
+import { getSSLErrorHint } from '../services/api/errorUtils.js';
+import { sendNotification } from '../services/notifier.js';
+import { GeminiOAuthService } from '../services/oauth/geminiCli.js'
+import { OAuthService } from '../services/oauth/index.js';
+import { getOauthAccountInfo, validateForceLoginOrg } from '../utils/auth.js';
+import { getGlobalConfig, saveGlobalConfig } from '../utils/config.js';
+import { normalizeApiKeyForConfig } from '../utils/authPortable.js';
+import { type ProviderConfig, deriveProviderId, getProviderKeyFromConfig, normalizeCompatibleBaseURL, readCustomApiStorage, writeCustomApiStorage } from '../utils/customApiStorage.js';
+import { logError } from '../utils/log.js';
+import { getSettings_DEPRECATED } from '../utils/settings/settings.js';
+import { Select } from './CustomSelect/select.js';
+import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js';
+import { Spinner } from './Spinner.js';
+import TextInput from './TextInput.js';
+type Props = {
+  onDone(): void;
+  startingMessage?: string;
+  mode?: 'login' | 'setup-token';
+  forceLoginMethod?: 'claudeai' | 'console';
+  onTextInputActiveChange?: (active: boolean) => void;
+};
+type CompatibleApiProvider = 'anthropic-like' | 'openai-like' | 'gemini-like';
+type OpenAICompatibleAuthMode = 'chat-completions' | 'responses' | 'oauth';
+type GeminiCompatibleAuthMode = 'vertex-compatible' | 'gemini-cli-oauth';
+type CompatibleAuthMode = 'api-key' | OpenAICompatibleAuthMode | GeminiCompatibleAuthMode;
+type CustomConfigStep = 'authMode' | 'baseURL' | 'apiKey' | 'models';
+type ProviderRecordKey = {
+  kind: CompatibleApiProvider;
+  id: string;
+  authMode: CompatibleAuthMode;
+  baseURL?: string;
+};
+type OAuthStatus = {
+  state: 'idle';
+} // Initial state, waiting to select login method
+| {
+  state: 'manage_accounts';
+} // Show existing saved accounts
+| {
+  state: 'provider_actions';
+  providerId: string;
+} // Submenu for a selected saved provider
+| {
+  state: 'provider_select';
+} // Select compatible API protocol/provider
+| {
+  state: 'custom_config';
+  provider: CompatibleApiProvider;
+  authMode: CompatibleAuthMode;
+  step: CustomConfigStep;
+} // Collect custom compatible API endpoint config
+| {
+  state: 'platform_setup';
+} // Show platform setup info (Bedrock/Vertex/Foundry)
+| {
+  state: 'ready_to_start';
+} // Flow started, waiting for browser to open
+| {
+  state: 'waiting_for_login';
+  url: string;
+} // Browser opened, waiting for user to login
+| {
+  state: 'creating_api_key';
+} // Got access token, creating API key
+| {
+  state: 'about_to_retry';
+  nextState: OAuthStatus;
+} | {
+  state: 'success';
+  token?: string;
+} | {
+  state: 'confirm_delete';
+  providerId: string;
+  accountName: string;
+} | {
+  state: 'error';
+  message: string;
+  toRetry?: OAuthStatus;
+};
+
+function getDefaultAuthMode(provider: CompatibleApiProvider): CompatibleAuthMode {
+  return provider === 'openai-like'
+    ? 'chat-completions'
+    : provider === 'gemini-like'
+      ? 'vertex-compatible'
+      : 'api-key';
+}
+
+function isOpenAIOAuthMode(authMode: CompatibleAuthMode): authMode is 'oauth' {
+  return authMode === 'oauth';
+}
+
+function isGeminiOAuthMode(authMode: CompatibleAuthMode): authMode is 'gemini-cli-oauth' {
+  return authMode === 'gemini-cli-oauth';
+}
+
+function isBrowserOAuthAuthMode(
+  authMode: CompatibleAuthMode,
+): authMode is 'oauth' | 'gemini-cli-oauth' {
+  return isOpenAIOAuthMode(authMode) || isGeminiOAuthMode(authMode);
+}
+
+/**
+ * Extracts a short account/provider name from a baseURL for display in the UI.
+ * e.g. "https://sub2api.hackins.club/v1" → "sub2api"
+ *       "https://api.anthropic.com" → "Anthropic"
+ */
+function extractAccountNameFromUrl(baseURL: string | undefined, providerId: string): string {
+  if (providerId === 'anthropic-like') {
+    return baseURL ? extractHost(baseURL) : 'Anthropic';
+  }
+  if (providerId === 'gemini-like') {
+    return baseURL ? extractHost(baseURL) : 'Gemini-compatible';
+  }
+  if (!baseURL) return 'OpenAI-compatible';
+  return extractHost(baseURL);
+}
+
+function extractHost(url: string): string {
+  try {
+    const u = new URL(url);
+    let host = u.hostname
+      .replace(/^api[.-]/, '')
+      .replace(/^openai[.-]/, '')
+      .replace(/^claude[.-]/, '');
+    if (host.includes('.')) {
+      host = host.split('.')[0]!;
+    }
+    return host || url;
+  } catch {
+    return url;
+  }
+}
+
+function normalizeModelsInput(value: string): string[] {
+  return [...new Set(value.split(/\s+/).map(item => item.trim()).filter(Boolean))];
+}
+
+function formatModelsInput(models: string[] | undefined, fallback?: string): string {
+  if (models && models.length > 0) {
+    return models.join(' ');
+  }
+  return fallback ?? '';
+}
+
+function getProviderKey(provider: ProviderRecordKey): string {
+  return `${provider.kind}::${provider.id}::${provider.authMode}::${provider.baseURL ?? ''}`;
+}
+
+function findProviderByKey(
+  providers: ProviderConfig[],
+  key: ProviderRecordKey | undefined,
+): ProviderConfig | undefined {
+  if (!key) return undefined;
+  return providers.find(provider => getProviderKeyFromConfig(provider) === getProviderKey(key));
+}
+
+function getProviderModelsInput(
+  providers: ProviderConfig[] | undefined,
+  key: ProviderRecordKey | undefined,
+  fallback?: string,
+): string {
+  if (!providers || providers.length === 0) {
+    return fallback ?? '';
+  }
+  const provider = findProviderByKey(providers, key);
+  return formatModelsInput(provider?.models, fallback);
+}
+
+function buildActiveSnapshot(
+  provider: ProviderConfig | undefined,
+  activeModel: string | undefined,
+): {
+  kind?: CompatibleApiProvider;
+  provider?: 'anthropic' | 'openai' | 'gemini';
+  providerId?: string;
+  baseURL?: string;
+  apiKey?: string;
+  model?: string;
+  savedModels?: string[];
+} {
+  return {
+    kind: provider?.kind,
+    provider:
+      provider?.kind === 'openai-like'
+        ? 'openai'
+        : provider?.kind === 'anthropic-like'
+          ? 'anthropic'
+          : provider?.kind === 'gemini-like'
+            ? 'gemini'
+            : undefined,
+    providerId: provider?.id,
+    baseURL: provider?.baseURL,
+    apiKey:
+      provider?.kind === 'gemini-like' &&
+      provider?.authMode === 'gemini-cli-oauth'
+        ? undefined
+        : provider?.apiKey,
+    model: activeModel,
+    savedModels: provider?.models,
+  };
+}
+
+function parseManualOAuthInput(value: string): {
+  authorizationCode: string;
+  state: string;
+} | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const authorizationCode = url.searchParams.get('code');
+    const state = url.searchParams.get('state');
+    if (authorizationCode && state) {
+      return { authorizationCode, state };
+    }
+  } catch {
+    // Fall through to raw code parsing.
+  }
+
+  const [authorizationCode, state] = trimmed.split('#');
+  if (!authorizationCode || !state) {
+    return null;
+  }
+  return { authorizationCode, state };
+}
+
+const PASTE_HERE_MSG = 'Paste code here if prompted > ';
+export function ConsoleOAuthFlow({
+  onDone,
+  startingMessage,
+  mode = 'login',
+  forceLoginMethod: forceLoginMethodProp,
+  onTextInputActiveChange,
+}: Props): React.ReactNode {
+  const settings = getSettings_DEPRECATED() || {};
+  const forceLoginMethod = forceLoginMethodProp ?? settings.forceLoginMethod;
+  const orgUUID = settings.forceLoginOrgUUID;
+  const forcedMethodMessage = forceLoginMethod === 'claudeai' ? 'Login method pre-selected: Subscription Plan (Claude Pro/Max)' : forceLoginMethod === 'console' ? 'Login method pre-selected: API Usage Billing (Anthropic Console)' : null;
+  const readPersistedCustomApiEndpoint = useCallback(() => ({
+    ...(getGlobalConfig().customApiEndpoint ?? {}),
+    ...readCustomApiStorage()
+  }), []);
+  const [persistedCustomApiEndpoint, setPersistedCustomApiEndpoint] = useState(readPersistedCustomApiEndpoint);
+  const persistedProviders = persistedCustomApiEndpoint.providers ?? [];
+  const persistedActiveProvider = persistedCustomApiEndpoint.activeProvider ?? persistedCustomApiEndpoint.providerId;
+  const persistedProviderConfig = persistedProviders.find(provider =>
+    provider.id === persistedActiveProvider &&
+    provider.authMode === (persistedCustomApiEndpoint.activeAuthMode ?? persistedCustomApiEndpoint.authMode),
+  ) ?? persistedProviders.find(provider => provider.id === persistedActiveProvider) ?? persistedProviders[0];
+  const persistedActiveProviderKey = persistedProviderConfig
+    ? getProviderKeyFromConfig(persistedProviderConfig)
+    : undefined;
+  const persistedProviderKind = persistedProviderConfig?.kind ?? persistedCustomApiEndpoint.kind ?? (persistedCustomApiEndpoint.provider === 'openai'
+    ? 'openai-like'
+    : persistedCustomApiEndpoint.provider === 'gemini'
+      ? 'gemini-like'
+      : 'anthropic-like');
+  const persistedAuthMode = persistedProviderConfig?.authMode ?? getDefaultAuthMode(persistedProviderKind);
+  const persistedProviderKey = persistedProviderConfig ? {
+    kind: persistedProviderConfig.kind,
+    id: persistedProviderConfig.id,
+    authMode: persistedProviderConfig.authMode,
+    baseURL: persistedProviderConfig.baseURL,
+  } : undefined;
+  const persistedModelsInput = getProviderModelsInput(
+    persistedProviders,
+    persistedProviderKey,
+    persistedCustomApiEndpoint.model ?? process.env.ANTHROPIC_MODEL ?? '',
+  );
+  const terminal = useTerminalNotification();
+  const [selectedProviderKey, setSelectedProviderKey] = useState<ProviderRecordKey | undefined>(persistedProviderKey);
+  const [oauthStatus, setOAuthStatus] = useState<OAuthStatus>(() => {
+    if (mode === 'setup-token') {
+      return {
+        state: 'ready_to_start'
+      };
+    }
+    if (forceLoginMethod === 'claudeai' || forceLoginMethod === 'console') {
+      return {
+        state: 'ready_to_start'
+      };
+    }
+    // Show account management if providers are already configured
+    if (persistedProviders.length > 0) {
+      return {
+        state: 'manage_accounts'
+      };
+    }
+    return {
+      state: 'provider_select'
+    };
+  });
+  const safeOauthStatus = oauthStatus ?? {
+    state: 'provider_select' as const
+  };
+  const [compatibleApiProvider, setCompatibleApiProvider] = useState<CompatibleApiProvider>(persistedProviderKind);
+  const [compatibleAuthMode, setCompatibleAuthMode] = useState<CompatibleAuthMode>(persistedAuthMode);
+  const [pastedCode, setPastedCode] = useState('');
+  const [cursorOffset, setCursorOffset] = useState(0);
+  const [customBaseURL, setCustomBaseURL] = useState(persistedProviderConfig?.baseURL ?? persistedCustomApiEndpoint.baseURL ?? process.env.ANTHROPIC_BASE_URL ?? '');
+  const [customApiKey, setCustomApiKey] = useState(persistedProviderConfig?.apiKey ?? persistedCustomApiEndpoint.apiKey ?? process.env.CLOAI_API_KEY ?? '');
+  const [customModels, setCustomModels] = useState(persistedModelsInput);
+  const [oauthService] = useState(() => new OAuthService());
+  const [geminiOAuthService] = useState(() => new GeminiOAuthService());
+  const [loginWithClaudeAi, setLoginWithClaudeAi] = useState(() => {
+    // Use Claude AI auth for setup-token mode to support user:inference scope
+    return mode === 'setup-token' || forceLoginMethod === 'claudeai';
+  });
+  // After a few seconds we suggest the user to copy/paste url if the
+  // browser did not open automatically. In this flow we expect the user to
+  // copy the code from the browser and paste it in the terminal
+  const [showPastePrompt, setShowPastePrompt] = useState(false);
+  const [urlCopied, setUrlCopied] = useState(false);
+  const [isCustomInputPasting, setIsCustomInputPasting] = useState(false);
+  const isEditingTextInput = safeOauthStatus.state === 'custom_config' || (safeOauthStatus.state === 'waiting_for_login' && showPastePrompt);
+  const textInputColumns = useTerminalSize().columns - PASTE_HERE_MSG.length - 1;
+  const refreshPersistedCustomApiEndpoint = useCallback(() => {
+    setPersistedCustomApiEndpoint(readPersistedCustomApiEndpoint());
+  }, [readPersistedCustomApiEndpoint]);
+  useEffect(() => {
+    onTextInputActiveChange?.(isEditingTextInput);
+  }, [isEditingTextInput, onTextInputActiveChange]);
+  const startCompatibleApiConfig = useCallback((provider: CompatibleApiProvider) => {
+    const nextAuthMode = getDefaultAuthMode(provider);
+    const nextProviderKey = {
+      kind: provider,
+      id: provider === 'openai-like' ? 'openai' : deriveProviderId(undefined, provider),
+      authMode: nextAuthMode,
+      baseURL: undefined,
+    };
+    setCompatibleApiProvider(provider);
+    setCompatibleAuthMode(nextAuthMode);
+    setSelectedProviderKey(undefined);
+    if (provider === 'openai-like') {
+      setCustomBaseURL('');
+    }
+    setCustomApiKey('');
+    setCustomModels(getProviderModelsInput(persistedProviders, nextProviderKey));
+    setOAuthStatus({
+      state: 'custom_config',
+      provider,
+      authMode: nextAuthMode,
+      step: provider === 'anthropic-like' ? 'baseURL' : 'authMode'
+    });
+  }, [persistedProviders]);
+
+  // Account management: open submenu for an existing saved provider
+  const handleOpenProviderActions = useCallback((providerId: string) => {
+    const provider =
+      persistedProviders.find(
+        p => getProviderKeyFromConfig(p) === providerId || p.id === providerId,
+      ) ?? persistedProviders[0];
+    if (provider) {
+      setSelectedProviderKey({
+        kind: provider.kind,
+        id: provider.id,
+        authMode: provider.authMode,
+        baseURL: provider.baseURL,
+      });
+      setCompatibleApiProvider(provider.kind);
+      setCompatibleAuthMode(provider.authMode);
+      setCustomBaseURL(provider.baseURL ?? '');
+      setCustomApiKey(provider.apiKey ?? '');
+      setCustomModels(formatModelsInput(provider.models));
+    }
+    setOAuthStatus({
+      state: 'provider_actions',
+      providerId,
+    });
+  }, [persistedProviders]);
+  // Account management: confirm deletion of an existing provider
+  const handleDeleteAccountRequest = useCallback((providerId: string) => {
+    const provider =
+      persistedProviders.find(
+        p => getProviderKeyFromConfig(p) === providerId || p.id === providerId,
+      ) ?? persistedProviders[0];
+    const accountName = provider?.id ?? extractAccountNameFromUrl(provider?.baseURL, provider?.kind ?? 'openai-like');
+    if (provider) {
+      setSelectedProviderKey({
+        kind: provider.kind,
+        id: provider.id,
+        authMode: provider.authMode,
+        baseURL: provider.baseURL,
+      });
+    }
+    setOAuthStatus({
+      state: 'confirm_delete',
+      providerId,
+      accountName,
+    });
+  }, [persistedProviders]);
+
+  // Account management: confirm deletion and remove provider
+  const handleDeleteAccountConfirm = useCallback(() => {
+    if (safeOauthStatus.state !== 'confirm_delete') return;
+    const { providerId, accountName } = safeOauthStatus;
+    const currentStorage = readCustomApiStorage();
+    const currentProviders = currentStorage.providers ?? [];
+    const providerToDelete =
+      findProviderByKey(currentProviders, selectedProviderKey) ??
+      currentProviders.find(
+        p => getProviderKeyFromConfig(p) === providerId || p.id === providerId,
+      );
+    if (!providerToDelete) {
+      setOAuthStatus({ state: 'manage_accounts' });
+      return;
+    }
+    const remainingProviders = currentProviders.filter(
+      p => getProviderKeyFromConfig(p) !== getProviderKeyFromConfig(providerToDelete),
+    );
+    const activeProvider = currentProviders.find(
+      p => p.id === currentStorage.activeProvider,
+    );
+    const next =
+      activeProvider &&
+      getProviderKeyFromConfig(activeProvider) !== getProviderKeyFromConfig(providerToDelete)
+        ? remainingProviders.find(
+            p => getProviderKeyFromConfig(p) === getProviderKeyFromConfig(activeProvider),
+          )
+        : remainingProviders[0];
+    const nextSnapshot = buildActiveSnapshot(next, next?.models[0]);
+    if (next) {
+      setSelectedProviderKey({
+        kind: next.kind,
+        id: next.id,
+        authMode: next.authMode,
+        baseURL: next.baseURL,
+      });
+      setCompatibleApiProvider(next.kind);
+      setCompatibleAuthMode(next.authMode);
+      setCustomBaseURL(next.baseURL ?? '');
+      setCustomApiKey(next.apiKey ?? '');
+      setCustomModels(formatModelsInput(next.models));
+    } else {
+      setSelectedProviderKey(undefined);
+      setCompatibleApiProvider('openai-like');
+      setCompatibleAuthMode('chat-completions');
+      setCustomBaseURL('');
+      setCustomApiKey('');
+      setCustomModels('');
+    }
+    writeCustomApiStorage({
+      ...currentStorage,
+      activeProviderKey: next ? getProviderKeyFromConfig(next) : undefined,
+      providers: remainingProviders.length > 0 ? remainingProviders : undefined,
+      activeProvider: next?.id,
+      activeModel: next?.models[0],
+      ...nextSnapshot,
+    });
+    saveGlobalConfig(current => ({
+      ...current,
+      customApiEndpoint: next ? nextSnapshot : undefined,
+    }));
+    refreshPersistedCustomApiEndpoint();
+    if (nextSnapshot.baseURL) {
+      process.env.ANTHROPIC_BASE_URL = nextSnapshot.baseURL;
+    } else {
+      delete process.env.ANTHROPIC_BASE_URL;
+    }
+    if (nextSnapshot.apiKey) {
+      process.env.CLOAI_API_KEY = nextSnapshot.apiKey;
+    } else {
+      delete process.env.CLOAI_API_KEY;
+    }
+    if (nextSnapshot.model) {
+      process.env.ANTHROPIC_MODEL = nextSnapshot.model;
+    } else {
+      delete process.env.ANTHROPIC_MODEL;
+    }
+    setOAuthStatus(
+      remainingProviders.length > 0
+        ? { state: 'manage_accounts' }
+        : { state: 'provider_select' },
+    );
+    void sendNotification(
+      {
+        message: `Removed account: ${accountName}`,
+        notificationType: 'auth_success',
+      },
+      terminal,
+    );
+  }, [safeOauthStatus, selectedProviderKey, terminal, refreshPersistedCustomApiEndpoint]);
+
+  // Log forced login method on mount
+  useEffect(() => {
+    if (forceLoginMethod === 'claudeai') {
+      logEvent('tengu_oauth_claudeai_forced', {});
+    } else if (forceLoginMethod === 'console') {
+      logEvent('tengu_oauth_console_forced', {});
+    }
+  }, [forceLoginMethod]);
+
+  // Retry logic
+  useEffect(() => {
+    if (safeOauthStatus.state === 'about_to_retry') {
+      const timer = setTimeout(setOAuthStatus, 1000, safeOauthStatus.nextState);
+      return () => clearTimeout(timer);
+    }
+  }, [safeOauthStatus]);
+
+  // Handle Enter to continue on success state
+  useKeybinding('confirm:yes', () => {
+    logEvent('tengu_oauth_success', {
+      loginWithClaudeAi
+    });
+    onDone();
+  }, {
+    context: 'Confirmation',
+    isActive: safeOauthStatus.state === 'success' && mode !== 'setup-token'
+  });
+
+  // Handle Enter to continue from platform setup
+  useKeybinding('confirm:yes', () => {
+    setOAuthStatus({
+      state: 'idle'
+    });
+  }, {
+    context: 'Confirmation',
+    isActive: safeOauthStatus.state === 'platform_setup'
+  });
+
+  // Handle Enter to retry on error state
+  useKeybinding('confirm:yes', () => {
+    if (safeOauthStatus.state === 'error' && safeOauthStatus.toRetry) {
+      setPastedCode('');
+      setOAuthStatus({
+        state: 'about_to_retry',
+        nextState: safeOauthStatus.toRetry
+      });
+    }
+  }, {
+    context: 'Confirmation',
+    isActive: safeOauthStatus.state === 'error' && !!safeOauthStatus.toRetry
+  });
+
+  // Handle Escape to go back from provider submenu
+  useKeybinding('select:cancel', () => {
+    if (safeOauthStatus.state === 'provider_actions') {
+      setOAuthStatus({ state: 'manage_accounts' });
+    }
+  }, {
+    context: 'Select',
+    isActive: safeOauthStatus.state === 'provider_actions'
+  });
+
+  useEffect(() => {
+    if (pastedCode === 'c' && safeOauthStatus.state === 'waiting_for_login' && showPastePrompt && !urlCopied) {
+      void setClipboard(safeOauthStatus.url).then(raw => {
+        if (raw) process.stdout.write(raw);
+        setUrlCopied(true);
+        setTimeout(setUrlCopied, 2000, false);
+      });
+      setPastedCode('');
+    }
+  }, [pastedCode, safeOauthStatus, showPastePrompt, urlCopied]);
+  const persistCustomEndpoint = useCallback((input?: {
+    models?: string;
+    baseURL?: string;
+    apiKey?: string;
+  }) => {
+    const nextBaseURL = normalizeCompatibleBaseURL(input?.baseURL ?? customBaseURL);
+    const nextApiKey = (input?.apiKey ?? customApiKey).trim();
+    const nextModels = normalizeModelsInput(input?.models ?? customModels);
+    const nextActiveModel = nextModels[0];
+    const normalizedKey = nextApiKey ? normalizeApiKeyForConfig(nextApiKey) : null;
+    const providerKind = compatibleApiProvider;
+    const providerId = isOpenAIOAuthMode(compatibleAuthMode) && providerKind === 'openai-like'
+      ? 'openai'
+      : deriveProviderId(nextBaseURL || undefined, providerKind);
+    const shouldClearEndpointCredentials =
+      providerKind === 'gemini-like' &&
+      compatibleAuthMode === 'gemini-cli-oauth';
+    const providerConfig = {
+      id: providerId,
+      kind: providerKind,
+      authMode: compatibleAuthMode,
+      baseURL: shouldClearEndpointCredentials ? undefined : nextBaseURL,
+      apiKey:
+        isBrowserOAuthAuthMode(compatibleAuthMode) || shouldClearEndpointCredentials
+          ? undefined
+          : nextApiKey || undefined,
+      models: nextModels
+    };
+    const existingProviders = persistedCustomApiEndpoint.providers ?? [];
+    const exactKey = getProviderKeyFromConfig(providerConfig);
+    const providers = [
+      ...existingProviders.filter(provider => getProviderKeyFromConfig(provider) !== exactKey),
+      providerConfig
+    ];
+    const activeSnapshot = buildActiveSnapshot(providerConfig, nextActiveModel);
+    setSelectedProviderKey({
+      kind: providerConfig.kind,
+      id: providerConfig.id,
+      authMode: providerConfig.authMode,
+      baseURL: providerConfig.baseURL,
+    });
+    if (shouldClearEndpointCredentials) {
+      delete process.env.ANTHROPIC_BASE_URL;
+      delete process.env.CLOAI_API_KEY;
+    } else {
+      process.env.ANTHROPIC_BASE_URL = providerConfig.baseURL ?? '';
+      process.env.CLOAI_API_KEY = providerConfig.apiKey ?? '';
+    }
+    process.env.ANTHROPIC_MODEL = nextActiveModel ?? '';
+    saveGlobalConfig(current => ({
+      ...current,
+      customApiEndpoint: activeSnapshot,
+      customApiKeyResponses: normalizedKey ? {
+        approved: [...new Set([...(current.customApiKeyResponses?.approved ?? []), normalizedKey])],
+        rejected: (current.customApiKeyResponses?.rejected ?? []).filter(key => key !== normalizedKey)
+      } : current.customApiKeyResponses
+    }));
+    writeCustomApiStorage({
+      activeProviderKey: getProviderKeyFromConfig(providerConfig),
+      activeProvider: providerConfig.id,
+      activeModel: nextActiveModel,
+      activeAuthMode: providerConfig.authMode,
+      providers,
+      ...activeSnapshot,
+    });
+    refreshPersistedCustomApiEndpoint();
+  }, [compatibleApiProvider, compatibleAuthMode, customApiKey, customBaseURL, customModels, persistedCustomApiEndpoint.providers, refreshPersistedCustomApiEndpoint]);
+  const handleSubmitCustomConfig = useCallback((value: string) => {
+    if (safeOauthStatus.state !== 'custom_config') {
+      return;
+    }
+    if (safeOauthStatus.step === 'authMode') {
+      const nextAuthMode = value as CompatibleAuthMode;
+      const nextProviderKey = {
+        kind: safeOauthStatus.provider,
+        id: nextAuthMode === 'oauth' && safeOauthStatus.provider === 'openai-like'
+          ? 'openai'
+          : deriveProviderId(normalizeCompatibleBaseURL(customBaseURL), safeOauthStatus.provider),
+        authMode: nextAuthMode,
+        baseURL: nextAuthMode === 'oauth' || nextAuthMode === 'gemini-cli-oauth'
+          ? undefined
+          : normalizeCompatibleBaseURL(customBaseURL),
+      };
+      setCompatibleAuthMode(nextAuthMode);
+      setCustomApiKey('');
+      setCustomModels(getProviderModelsInput(persistedCustomApiEndpoint.providers, nextProviderKey));
+      setCursorOffset(0);
+      // For official OpenAI OAuth, skip manual model input — models are fetched
+      // dynamically after token exchange via the Codex models API.
+      if (nextAuthMode === 'oauth' && safeOauthStatus.provider === 'openai-like') {
+        setLoginWithClaudeAi(false);
+        setOAuthStatus({ state: 'ready_to_start' });
+        return;
+      }
+      setOAuthStatus({
+        state: 'custom_config',
+        provider: safeOauthStatus.provider,
+        authMode: nextAuthMode,
+        step: isBrowserOAuthAuthMode(nextAuthMode)
+          ? 'models'
+          : nextAuthMode === 'vertex-compatible'
+            ? 'baseURL'
+            : 'baseURL'
+      });
+      return;
+    }
+    if (safeOauthStatus.step === 'baseURL') {
+      const nextValue = normalizeCompatibleBaseURL(value);
+      if (!nextValue) {
+        setOAuthStatus({
+          state: 'error',
+          message: 'Compatible API base URL is required',
+          toRetry: {
+            state: 'custom_config',
+            provider: safeOauthStatus.provider,
+            authMode: safeOauthStatus.authMode,
+            step: 'baseURL'
+          }
+        });
+        return;
+      }
+      setCustomBaseURL(nextValue);
+      setCursorOffset(0);
+      setOAuthStatus({
+        state: 'custom_config',
+        provider: safeOauthStatus.provider,
+        authMode: safeOauthStatus.authMode,
+        step: 'apiKey'
+      });
+      return;
+    }
+    if (safeOauthStatus.step === 'oauthBaseURL') {
+      const nextValue = value.trim();
+      if (!nextValue) {
+        setOAuthStatus({
+          state: 'error',
+          message: 'OAuth base URL is required for OIDC discovery',
+          toRetry: {
+            state: 'custom_config',
+            provider: safeOauthStatus.provider,
+            authMode: safeOauthStatus.authMode,
+            step: 'oauthBaseURL'
+          }
+        });
+        return;
+      }
+      setCustomBaseURL(nextValue);
+      setCursorOffset(0);
+      setOAuthStatus({
+        state: 'custom_config',
+        provider: safeOauthStatus.provider,
+        authMode: safeOauthStatus.authMode,
+        step: 'models'
+      });
+      return;
+    }
+    if (safeOauthStatus.step === 'apiKey') {
+      const nextValue = value.trim();
+      if (!nextValue) {
+        setOAuthStatus({
+          state: 'error',
+          message: 'API key is required',
+          toRetry: {
+            state: 'custom_config',
+            provider: safeOauthStatus.provider,
+            authMode: safeOauthStatus.authMode,
+            step: 'apiKey'
+          }
+        });
+        return;
+      }
+      setCustomApiKey(nextValue);
+      setCursorOffset(0);
+      setOAuthStatus({
+        state: 'custom_config',
+        provider: safeOauthStatus.provider,
+        authMode: safeOauthStatus.authMode,
+        step: 'models'
+      });
+      return;
+    }
+    const nextValue = value.trim();
+    if (normalizeModelsInput(nextValue).length === 0) {
+      setOAuthStatus({
+        state: 'error',
+        message: 'At least one model is required',
+        toRetry: {
+          state: 'custom_config',
+          provider: safeOauthStatus.provider,
+          authMode: safeOauthStatus.authMode,
+          step: 'models'
+        }
+      });
+      return;
+    }
+    setCustomModels(nextValue);
+    persistCustomEndpoint({ models: nextValue });
+    // For OAuth auth mode, initiate the OAuth browser flow instead of immediate success
+    if (isBrowserOAuthAuthMode(safeOauthStatus.authMode)) {
+      setLoginWithClaudeAi(false); // Use console/non-Claude.ai path for OAuth
+      setOAuthStatus({ state: 'ready_to_start' }); // Triggers startOAuth via useEffect
+    } else {
+      setOAuthStatus({ state: 'success' });
+      void sendNotification({
+        message:
+          safeOauthStatus.provider === 'openai-like'
+            ? `OpenAI-compatible ${safeOauthStatus.authMode} endpoint saved`
+            : safeOauthStatus.provider === 'gemini-like'
+              ? `Gemini-compatible ${safeOauthStatus.authMode} endpoint saved`
+              : 'Anthropic-compatible endpoint saved',
+        notificationType: 'auth_success'
+      }, terminal);
+    }
+  }, [safeOauthStatus, persistCustomEndpoint, terminal, setLoginWithClaudeAi, persistedCustomApiEndpoint.providers, customBaseURL]);
+  async function handleSubmitCode(value: string, url: string) {
+    try {
+      const parsedInput = parseManualOAuthInput(value);
+      if (!parsedInput) {
+        setOAuthStatus({
+          state: 'error',
+          message: 'Invalid code. Paste the full callback URL or code#state.',
+          toRetry: {
+            state: 'waiting_for_login',
+            url
+          }
+        });
+        return;
+      }
+      const { authorizationCode, state } = parsedInput;
+
+      // Track which path the user is taking (manual code entry)
+      logEvent('tengu_oauth_manual_entry', {});
+      if (compatibleApiProvider === 'gemini-like') {
+        geminiOAuthService.handleManualAuthCodeInput({
+          authorizationCode,
+          state,
+        });
+      } else {
+        oauthService.handleManualAuthCodeInput({
+          authorizationCode,
+          state,
+        });
+      }
+    } catch (err: unknown) {
+      logError(err);
+      setOAuthStatus({
+        state: 'error',
+        message: (err as Error).message,
+        toRetry: {
+          state: 'waiting_for_login',
+          url
+        }
+      });
+    }
+  }
+  const startOAuth = useCallback(async () => {
+    try {
+      const isOpenAIOAuth =
+        compatibleApiProvider === 'openai-like' && isOpenAIOAuthMode(compatibleAuthMode);
+      const isGeminiCliOAuth =
+        compatibleApiProvider === 'gemini-like' && isGeminiOAuthMode(compatibleAuthMode);
+      logEvent('tengu_oauth_flow_start', {
+        loginWithClaudeAi: isOpenAIOAuth || isGeminiCliOAuth ? false : loginWithClaudeAi,
+        oauthProvider: isOpenAIOAuth ? 'openai' : isGeminiCliOAuth ? 'gemini' : 'anthropic',
+      });
+      const result = isGeminiCliOAuth
+        ? await geminiOAuthService.startOAuthFlow(async url_0 => {
+            setOAuthStatus({
+              state: 'waiting_for_login',
+              url: url_0
+            });
+            setTimeout(setShowPastePrompt, 3000, true);
+          })
+        : await oauthService.startOAuthFlow(async url_0 => {
+            setOAuthStatus({
+              state: 'waiting_for_login',
+              url: url_0
+            });
+            setTimeout(setShowPastePrompt, 3000, true);
+          }, {
+            loginWithClaudeAi: isOpenAIOAuth ? false : loginWithClaudeAi,
+            oauthProvider: isOpenAIOAuth ? 'openai' : 'anthropic',
+            openaiClientId: undefined,
+            inferenceOnly: mode === 'setup-token',
+            expiresIn: mode === 'setup-token' ? 365 * 24 * 60 * 60 : undefined,
+            orgUUID
+          }).catch(err_1 => {
+        const isTokenExchangeError = err_1.message.includes('Token exchange failed');
+        // Enterprise TLS proxies (Zscaler et al.) intercept the token
+        // exchange POST and cause cryptic SSL errors. Surface an
+        // actionable hint so the user isn't stuck in a login loop.
+        const sslHint_0 = getSSLErrorHint(err_1);
+        setOAuthStatus({
+          state: 'error',
+          message: sslHint_0 ?? (isTokenExchangeError ? 'Failed to exchange authorization code for access token. Please try again.' : err_1.message),
+          toRetry: mode === 'setup-token' ? {
+            state: 'ready_to_start'
+          } : {
+            state: 'idle'
+          }
+        });
+        logEvent('tengu_oauth_token_exchange_error', {
+          error: err_1.message,
+          ssl_error: sslHint_0 !== null
+        });
+        throw err_1;
+      });
+      if (mode === 'setup-token') {
+        // For setup-token mode, return the OAuth access token directly (it can be used as an API key)
+        // Don't save to keychain - the token is displayed for manual use with CLAUDE_CODE_OAUTH_TOKEN
+        setOAuthStatus({
+          state: 'success',
+          token: result.accessToken
+        });
+      } else {
+        await installOAuthTokens(
+          result,
+          isGeminiCliOAuth ? 'gemini' : isOpenAIOAuth ? 'openai' : 'anthropic',
+        );
+        const updatedStorage = readCustomApiStorage();
+        const updatedProvider = updatedStorage.providers?.find(p =>
+          p.id === updatedStorage.activeProvider &&
+          p.authMode === (updatedStorage.activeAuthMode ?? updatedStorage.authMode),
+        ) ?? updatedStorage.providers?.find(p => p.id === updatedStorage.activeProvider) ?? updatedStorage.providers?.[0];
+        if (updatedProvider) {
+          const updatedProviderKey = {
+            kind: updatedProvider.kind,
+            id: updatedProvider.id,
+            authMode: updatedProvider.authMode,
+            baseURL: updatedProvider.baseURL,
+          };
+          setSelectedProviderKey({
+            kind: updatedProvider.kind,
+            id: updatedProvider.id,
+            authMode: updatedProvider.authMode,
+            baseURL: updatedProvider.baseURL,
+          });
+          setCompatibleApiProvider(updatedProvider.kind);
+          setCompatibleAuthMode(updatedProvider.authMode);
+          setCustomBaseURL(updatedProvider.baseURL ?? '');
+          setCustomApiKey(updatedProvider.apiKey ?? '');
+          setCustomModels(getProviderModelsInput(updatedStorage.providers, updatedProviderKey));
+        }
+        // Only validate Anthropic org for Anthropic OAuth; OpenAI OAuth skips this
+        if (!isOpenAIOAuth && !isGeminiCliOAuth) {
+          const orgResult = await validateForceLoginOrg();
+          if (!orgResult.valid) {
+            throw new Error('Forced login organization validation failed');
+          }
+        }
+        setOAuthStatus({
+          state: 'success'
+        });
+        void sendNotification({
+          message: isGeminiCliOAuth
+            ? 'Gemini CLI OAuth successful'
+            : isOpenAIOAuth
+              ? 'OpenAI OAuth successful'
+              : 'Claude Code login successful',
+          notificationType: 'auth_success'
+        }, terminal);
+      }
+    } catch (err_0) {
+      const errorMessage = (err_0 as Error).message;
+      const sslHint = getSSLErrorHint(err_0);
+      setOAuthStatus({
+        state: 'error',
+        message: sslHint ?? errorMessage,
+        toRetry: {
+          state: mode === 'setup-token' ? 'ready_to_start' : 'idle'
+        }
+      });
+      logEvent('tengu_oauth_error', {
+        error: errorMessage as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        ssl_error: sslHint !== null
+      });
+    }
+  }, [oauthService, geminiOAuthService, setShowPastePrompt, loginWithClaudeAi, mode, orgUUID, compatibleApiProvider, compatibleAuthMode]);
+  const pendingOAuthStartRef = useRef(false);
+  useEffect(() => {
+    if (safeOauthStatus.state === 'ready_to_start' && !pendingOAuthStartRef.current) {
+      pendingOAuthStartRef.current = true;
+      process.nextTick((startOAuth_0: () => Promise<void>, pendingOAuthStartRef_0: React.MutableRefObject<boolean>) => {
+        void startOAuth_0();
+        pendingOAuthStartRef_0.current = false;
+      }, startOAuth, pendingOAuthStartRef);
+    }
+  }, [safeOauthStatus.state, startOAuth]);
+
+  // Auto-exit for setup-token mode
+  useEffect(() => {
+    if (mode === 'setup-token' && safeOauthStatus.state === 'success') {
+      // Delay to ensure static content is fully rendered before exiting
+      const timer_0 = setTimeout((loginWithClaudeAi_0, onDone_0) => {
+        logEvent('tengu_oauth_success', {
+          loginWithClaudeAi: loginWithClaudeAi_0
+        });
+        // Don't clear terminal so the token remains visible
+        onDone_0();
+      }, 500, loginWithClaudeAi, onDone);
+      return () => clearTimeout(timer_0);
+    }
+  }, [mode, safeOauthStatus, loginWithClaudeAi, onDone]);
+
+  // Cleanup OAuth service when component unmounts
+  useEffect(() => {
+    return () => {
+      oauthService.cleanup();
+      geminiOAuthService.cleanup();
+    };
+  }, [oauthService, geminiOAuthService]);
+  return <Box flexDirection="column" gap={1}>
+      {safeOauthStatus.state === 'waiting_for_login' && showPastePrompt && <Box flexDirection="column" key="urlToCopy" gap={1} paddingBottom={1}>
+          <Box paddingX={1}>
+            <Text dimColor>
+              Browser didn&apos;t open? Use the url below to sign in{' '}
+            </Text>
+            {urlCopied ? <Text color="success">(Copied!)</Text> : <Text dimColor>
+                <KeyboardShortcutHint shortcut="c" action="copy" parens />
+              </Text>}
+          </Box>
+          <Link url={safeOauthStatus.url}>
+            <Text dimColor>{safeOauthStatus.url}</Text>
+          </Link>
+        </Box>}
+      {mode === 'setup-token' && safeOauthStatus.state === 'success' && safeOauthStatus.token && <Box key="tokenOutput" flexDirection="column" gap={1} paddingTop={1}>
+            <Text color="success">
+              ✓ Long-lived authentication token created successfully!
+            </Text>
+            <Box flexDirection="column" gap={1}>
+              <Text>Your OAuth token (valid for 1 year):</Text>
+              <Text color="warning">{safeOauthStatus.token}</Text>
+              <Text dimColor>
+                Store this token securely. You won&apos;t be able to see it
+                again.
+              </Text>
+              <Text dimColor>
+                Use this token by setting: export
+                CLAUDE_CODE_OAUTH_TOKEN=&lt;token&gt;
+              </Text>
+            </Box>
+          </Box>}
+      <Box paddingLeft={1} flexDirection="column" gap={1}>
+        <OAuthStatusMessage oauthStatus={safeOauthStatus} mode={mode} startingMessage={startingMessage} forcedMethodMessage={forcedMethodMessage} showPastePrompt={showPastePrompt} pastedCode={pastedCode} setPastedCode={setPastedCode} cursorOffset={cursorOffset} setCursorOffset={setCursorOffset} textInputColumns={textInputColumns} handleSubmitCode={handleSubmitCode} setOAuthStatus={setOAuthStatus} setLoginWithClaudeAi={setLoginWithClaudeAi} customBaseURL={customBaseURL} customApiKey={customApiKey} customModels={customModels} setCustomBaseURL={setCustomBaseURL} setCustomApiKey={setCustomApiKey} setCustomModels={setCustomModels} isCustomInputPasting={isCustomInputPasting} setIsCustomInputPasting={setIsCustomInputPasting} handleSubmitCustomConfig={handleSubmitCustomConfig} startCompatibleApiConfig={startCompatibleApiConfig} compatibleApiProvider={compatibleApiProvider} persistedProviders={persistedProviders} persistedActiveProvider={persistedActiveProvider} persistedActiveProviderKey={persistedActiveProviderKey} handleOpenProviderActions={handleOpenProviderActions} handleDeleteAccountRequest={handleDeleteAccountRequest} handleDeleteAccountConfirm={handleDeleteAccountConfirm} onDone={onDone} />
+      </Box>
+    </Box>;
+}
+type OAuthStatusMessageProps = {
+  oauthStatus: OAuthStatus;
+  mode: 'login' | 'setup-token';
+  startingMessage: string | undefined;
+  forcedMethodMessage: string | null;
+  showPastePrompt: boolean;
+  pastedCode: string;
+  setPastedCode: (value: string) => void;
+  cursorOffset: number;
+  setCursorOffset: (offset: number) => void;
+  textInputColumns: number;
+  handleSubmitCode: (value: string, url: string) => void;
+  setOAuthStatus: (status: OAuthStatus) => void;
+  setLoginWithClaudeAi: (value: boolean) => void;
+  customBaseURL: string;
+  customApiKey: string;
+  customModels: string;
+  setCustomBaseURL: (value: string) => void;
+  setCustomApiKey: (value: string) => void;
+  setCustomModels: (value: string) => void;
+  isCustomInputPasting: boolean;
+  setIsCustomInputPasting: (value: boolean) => void;
+  handleSubmitCustomConfig: (value: string) => void;
+  startCompatibleApiConfig: (provider: CompatibleApiProvider) => void;
+  compatibleApiProvider: CompatibleApiProvider;
+  persistedProviders: ProviderConfig[];
+  persistedActiveProviderKey: string | undefined;
+  handleOpenProviderActions: (providerId: string) => void;
+  handleDeleteAccountRequest: (providerId: string) => void;
+  handleDeleteAccountConfirm: () => void;
+  onDone: () => void;
+};
+
+function OAuthStatusMessage({
+  oauthStatus,
+  mode,
+  startingMessage,
+  forcedMethodMessage,
+  showPastePrompt,
+  pastedCode,
+  setPastedCode,
+  cursorOffset,
+  setCursorOffset,
+  textInputColumns,
+  handleSubmitCode,
+  setOAuthStatus,
+  setLoginWithClaudeAi,
+  customBaseURL,
+  customApiKey,
+  customModels,
+  setCustomBaseURL,
+  setCustomApiKey,
+  setCustomModels,
+  isCustomInputPasting,
+  setIsCustomInputPasting,
+  handleSubmitCustomConfig,
+  startCompatibleApiConfig,
+  compatibleApiProvider,
+  persistedProviders,
+  persistedActiveProviderKey,
+  handleOpenProviderActions,
+  handleDeleteAccountRequest,
+  handleDeleteAccountConfirm,
+  onDone,
+}: OAuthStatusMessageProps) {
+  void isCustomInputPasting;
+  void compatibleApiProvider;
+
+  switch (oauthStatus.state) {
+    case 'manage_accounts': {
+      const providers = persistedProviders ?? [];
+      return (
+        <Box flexDirection="column" gap={1} marginTop={1}>
+
+          <Text bold>Manage accounts</Text>
+          <Text dimColor>Select a provider to manage it.</Text>
+          <Select
+            defaultValue={persistedActiveProviderKey}
+            defaultFocusValue={persistedActiveProviderKey}
+            options={[
+              ...providers.map(provider => {
+                const accountName = provider.id || extractAccountNameFromUrl(provider.baseURL, provider.kind);
+                const typeLabel = provider.kind === 'openai-like'
+                  ? 'OpenAI-compatible'
+                  : provider.kind === 'gemini-like'
+                    ? 'Gemini-compatible'
+                    : 'Anthropic-compatible';
+                const authLabel = provider.authMode === 'oauth'
+                  ? 'OAuth'
+                  : provider.authMode === 'responses'
+                    ? 'responses'
+                    : provider.authMode === 'chat-completions'
+                      ? 'chat-completions'
+                      : provider.authMode === 'gemini-cli-oauth'
+                        ? 'Gemini CLI OAuth'
+                        : provider.authMode === 'vertex-compatible'
+                          ? 'Vertex-compatible'
+                          : 'API key';
+                return {
+                  label: (
+                    <Text>
+                      <Text bold>{accountName}</Text>
+                      <Text dimColor> · {typeLabel} · {authLabel} · {provider.models.length} model{provider.models.length !== 1 ? 's' : ''}</Text>
+                    </Text>
+                  ),
+                  value: getProviderKeyFromConfig(provider),
+                };
+              }),
+              {
+                label: <Text>Add new account →</Text>,
+                value: '__add_new__' as const,
+              },
+              {
+                label: <Text dimColor>Done →</Text>,
+                value: '__done__' as const,
+              },
+            ]}
+            onChange={value => {
+              if (value === '__add_new__') {
+                setOAuthStatus({ state: 'provider_select' });
+                return;
+              }
+              if (value === '__done__') {
+                onDone();
+                return;
+              }
+              handleOpenProviderActions(value as string);
+            }}
+          />
+        </Box>
+      );
+    }
+
+    case 'provider_actions': {
+      const provider = (persistedProviders ?? []).find(item => item.id === oauthStatus.providerId);
+      const accountName = provider?.id ?? extractAccountNameFromUrl(provider?.baseURL, provider?.kind ?? 'openai-like');
+      return (
+        <Box flexDirection="column" gap={1} marginTop={1}>
+          <Text bold>{accountName}</Text>
+          <Text dimColor>Choose an action for this provider.</Text>
+          <Select
+            defaultValue="logout"
+            defaultFocusValue="logout"
+            options={[
+              {
+                label: <Text>Logout</Text>,
+                value: 'logout',
+              },
+              {
+                label: <Text dimColor>Back</Text>,
+                value: 'back',
+              },
+            ]}
+            onChange={value => {
+              if (value === 'back') {
+                setOAuthStatus({ state: 'manage_accounts' });
+                return;
+              }
+              handleDeleteAccountRequest(oauthStatus.providerId);
+            }}
+            onCancel={() => setOAuthStatus({ state: 'manage_accounts' })}
+          />
+        </Box>
+      );
+    }
+
+    case 'confirm_delete':
+      return (
+        <Box flexDirection="column" gap={1} marginTop={1}>
+          <Text bold color="error">Remove account: {oauthStatus.accountName}?</Text>
+          <Text>This will remove the saved provider configuration.</Text>
+          <Select
+            defaultValue="no"
+            defaultFocusValue="no"
+            options={[
+              {
+                label: <Text>Yes</Text>,
+                value: 'yes',
+              },
+              {
+                label: <Text>No</Text>,
+                value: 'no',
+              },
+            ]}
+            onChange={value => {
+              if (value === 'yes') {
+                handleDeleteAccountConfirm();
+                return;
+              }
+              setOAuthStatus({ state: 'provider_actions', providerId: oauthStatus.providerId });
+            }}
+            onCancel={() => setOAuthStatus({ state: 'provider_actions', providerId: oauthStatus.providerId })}
+          />
+        </Box>
+      );
+
+    case 'provider_select':
+      return (
+        <Box flexDirection="column" gap={1} marginTop={1}>
+          <Text bold>Select API provider format</Text>
+          <Text>Select the compatible API style you want to configure.</Text>
+          <Box>
+            <Select
+              options={[
+                ...((persistedProviders?.length ?? 0) > 0 ? [{
+                  label: <Text dimColor>← Back to accounts</Text>,
+                  value: '__back__'
+                }] : []),
+                {
+                  label: (
+                    <Text>
+                      Anthropic-like API · <Text dimColor>Compatible with /v1/messages</Text>
+                    </Text>
+                  ),
+                  value: 'anthropic-like'
+                },
+                {
+                  label: (
+                    <Text>
+                      OpenAI-like API · <Text dimColor>Configure chat-completions, responses, or oauth</Text>
+                    </Text>
+                  ),
+                  value: 'openai-like'
+                },
+                {
+                  label: (
+                    <Text>
+                      Gemini-like API · <Text dimColor>Configure Vertex-compatible API or Gemini CLI OAuth</Text>
+                    </Text>
+                  ),
+                  value: 'gemini-like'
+                }
+              ]}
+              onChange={value => {
+                if (value === '__back__') {
+                  setOAuthStatus({ state: 'manage_accounts' });
+                  return;
+                }
+                startCompatibleApiConfig(value as CompatibleApiProvider);
+              }}
+            />
+          </Box>
+        </Box>
+      );
+
+    case 'custom_config': {
+      const providerLabel = oauthStatus.provider === 'openai-like'
+        ? 'OpenAI-compatible API'
+        : oauthStatus.provider === 'gemini-like'
+          ? 'Gemini-compatible API'
+          : 'Anthropic-compatible API';
+
+      if (oauthStatus.step === 'authMode') {
+        return (
+          <Box flexDirection="column" gap={1} marginTop={1}>
+            <Text bold>Configure compatible API</Text>
+            <Text>{providerLabel}</Text>
+            <Text>Select auth mode:</Text>
+            <Box>
+              <Select
+                options={oauthStatus.provider === 'openai-like'
+                  ? [
+                      {
+                        label: (
+                          <Text>
+                            chat-completions · <Text dimColor>Use /v1/chat/completions with API key auth</Text>
+                          </Text>
+                        ),
+                        value: 'chat-completions'
+                      },
+                      {
+                        label: (
+                          <Text>
+                            responses · <Text dimColor>Use /v1/responses with API key auth</Text>
+                          </Text>
+                        ),
+                        value: 'responses'
+                      },
+                      {
+                        label: (
+                          <Text>
+                            oauth · <Text dimColor>Use OAuth login and keep models available in /model</Text>
+                          </Text>
+                        ),
+                        value: 'oauth'
+                      }
+                    ]
+                  : [
+                      {
+                        label: (
+                          <Text>
+                            vertex-compatible · <Text dimColor>Use Gemini GenerateContent-compatible endpoint with API key auth</Text>
+                          </Text>
+                        ),
+                        value: 'vertex-compatible'
+                      },
+                      {
+                        label: (
+                          <Text>
+                            gemini-cli-oauth · <Text dimColor>Use Gemini CLI / Cloud Code Assist OAuth</Text>
+                          </Text>
+                        ),
+                        value: 'gemini-cli-oauth'
+                      }
+                    ]}
+                onChange={value => handleSubmitCustomConfig(String(value))}
+              />
+            </Box>
+          </Box>
+        );
+      }
+
+      const oauthMode = isBrowserOAuthAuthMode(oauthStatus.authMode);
+      const routeSuffix = oauthStatus.provider === 'gemini-like'
+        ? '/v1beta/models/{model}:streamGenerateContent'
+        : oauthStatus.authMode === 'responses'
+          ? '/v1/responses'
+          : oauthStatus.provider === 'openai-like'
+            ? '/v1/chat/completions'
+            : '/v1/messages';
+      const label = oauthStatus.step === 'baseURL'
+        ? oauthStatus.provider === 'openai-like'
+          ? oauthStatus.authMode === 'responses'
+            ? 'Enter the OpenAI-compatible Responses base URL:'
+            : 'Enter the OpenAI-compatible Chat Completions base URL:'
+          : oauthStatus.provider === 'gemini-like'
+            ? 'Enter the Gemini Vertex-compatible base URL:'
+            : 'Enter the Anthropic-compatible Messages base URL:'
+        : oauthStatus.step === 'apiKey'
+          ? oauthStatus.provider === 'gemini-like'
+            ? 'Enter Gemini API key:'
+            : oauthStatus.provider === 'openai-like'
+              ? 'Enter API key:'
+              : 'Enter Anthropic API key:'
+          : oauthStatus.provider === 'openai-like' && oauthStatus.authMode === 'oauth'
+            ? 'Enter one or more model names for OpenAI OAuth separated by spaces:'
+            : oauthStatus.provider === 'gemini-like' && oauthStatus.authMode === 'gemini-cli-oauth'
+              ? 'Enter one or more model names for Gemini CLI OAuth separated by spaces:'
+              : 'Enter one or more model names separated by spaces:';
+      const value = oauthStatus.step === 'baseURL' ? customBaseURL : oauthStatus.step === 'apiKey' ? customApiKey : customModels;
+      const onChange = oauthStatus.step === 'baseURL' ? setCustomBaseURL : oauthStatus.step === 'apiKey' ? setCustomApiKey : setCustomModels;
+      const placeholder = oauthStatus.step === 'baseURL'
+        ? oauthStatus.provider === 'openai-like'
+          ? 'http(s)://your-openai-compatible-endpoint.example.com'
+          : oauthStatus.provider === 'gemini-like'
+            ? 'https://generativelanguage.googleapis.com/v1beta'
+            : 'http(s)://your-anthropic-compatible-endpoint.example.com'
+        : oauthStatus.step === 'apiKey'
+          ? 'sk-...'
+          : oauthStatus.provider === 'openai-like'
+            ? 'gpt-5.4'
+            : oauthStatus.provider === 'gemini-like'
+              ? 'gemini-3-flash-preview gemini-3.1-pro-high'
+              : 'minimax-m2.7-highspeed';
+
+      return (
+        <Box flexDirection="column" gap={1} marginTop={1}>
+          <Text bold>Configure compatible API</Text>
+          <Text>
+            {providerLabel} · Auth mode: {oauthStatus.authMode}
+          </Text>
+          {oauthMode && oauthStatus.provider === 'openai-like' ? (
+            <Text dimColor>
+              OAuth mode uses the official OpenAI browser login. API key is not required. Models remain available in /model.
+            </Text>
+          ) : null}
+          <Text>{label}</Text>
+          <Box flexDirection="row">
+            <TextInput
+              value={value}
+              onChange={onChange}
+              onSubmit={handleSubmitCustomConfig}
+              onIsPastingChange={setIsCustomInputPasting}
+              cursorOffset={cursorOffset}
+              onChangeCursorOffset={setCursorOffset}
+              columns={oauthStatus.step === 'baseURL' ? Math.max(20, textInputColumns - 12) : textInputColumns}
+              focus
+              showCursor
+              placeholder={placeholder}
+              mask={oauthStatus.step === 'apiKey' ? '*' : undefined}
+              dimColor={oauthStatus.step === 'models' && value.length === 0}
+              onCancel={() => {
+                if (oauthStatus.step === 'models' && oauthStatus.provider === 'openai-like' && oauthStatus.authMode === 'oauth') {
+                  setOAuthStatus({
+                    state: 'custom_config',
+                    provider: oauthStatus.provider,
+                    authMode: oauthStatus.authMode,
+                    step: 'authMode',
+                  });
+                  return;
+                }
+                if (oauthStatus.step === 'models') {
+                  setOAuthStatus({
+                    state: 'custom_config',
+                    provider: oauthStatus.provider,
+                    authMode: oauthStatus.authMode,
+                    step: isBrowserOAuthAuthMode(oauthStatus.authMode) ? 'authMode' : 'apiKey',
+                  });
+                  return;
+                }
+                if (oauthStatus.step === 'apiKey') {
+                  setOAuthStatus({
+                    state: 'custom_config',
+                    provider: oauthStatus.provider,
+                    authMode: oauthStatus.authMode,
+                    step: 'baseURL',
+                  });
+                  return;
+                }
+                setOAuthStatus({ state: 'provider_select' });
+              }}
+            />
+            {oauthStatus.step === 'baseURL' && !oauthMode ? <Text dimColor>{routeSuffix}</Text> : null}
+          </Box>
+          <Text dimColor>
+            {oauthStatus.step === 'models' ? 'Press Enter to save the models.' : oauthStatus.step === 'apiKey' ? 'Press Enter to continue.' : 'Press Enter to save and continue.'}
+          </Text>
+        </Box>
+      );
+    }
+
+    case 'idle': {
+      const message = startingMessage ?? 'Claude Code can use your Claude subscription or API billing through your Console account.';
+
+      return (
+        <Box flexDirection="column" gap={1} marginTop={1}>
+          <Text bold>{message}</Text>
+          <Text>Select login method:</Text>
+          <Box>
+            <Select
+              options={[
+                {
+                  label: (
+                    <Text>
+                      Claude account with subscription · <Text dimColor>Pro, Max, Team, or Enterprise</Text>
+                    </Text>
+                  ),
+                  value: 'claudeai'
+                },
+                {
+                  label: (
+                    <Text>
+                      Anthropic Console account · <Text dimColor>API usage billing</Text>
+                    </Text>
+                  ),
+                  value: 'console'
+                },
+                {
+                  label: (
+                    <Text>
+                      3rd-party platform · <Text dimColor>Amazon Bedrock, Microsoft Foundry, or Vertex AI</Text>
+                    </Text>
+                  ),
+                  value: 'platform'
+                }
+              ]}
+              onChange={value => {
+                if (value === 'platform') {
+                  logEvent('tengu_oauth_platform_selected', {});
+                  setOAuthStatus({
+                    state: 'platform_setup'
+                  });
+                  return;
+                }
+
+                setOAuthStatus({
+                  state: 'ready_to_start'
+                });
+                if (value === 'claudeai') {
+                  logEvent('tengu_oauth_claudeai_selected', {});
+                  setLoginWithClaudeAi(true);
+                } else {
+                  logEvent('tengu_oauth_console_selected', {});
+                  setLoginWithClaudeAi(false);
+                }
+              }}
+            />
+          </Box>
+        </Box>
+      );
+    }
+
+    case 'platform_setup':
+      return (
+        <Box flexDirection="column" gap={1} marginTop={1}>
+          <Text bold>Using 3rd-party platforms</Text>
+          <Box flexDirection="column" gap={1}>
+            <Text>
+              Claude Code supports Amazon Bedrock, Microsoft Foundry, and Vertex AI. Set the required environment variables, then restart Claude Code.
+            </Text>
+            <Text>If you are part of an enterprise organization, contact your administrator for setup instructions.</Text>
+            <Box flexDirection="column" marginTop={1}>
+              <Text bold>Documentation:</Text>
+              <Text>
+                · Amazon Bedrock:{' '}
+                <Link url="https://code.claude.com/docs/en/amazon-bedrock">https://code.claude.com/docs/en/amazon-bedrock</Link>
+              </Text>
+              <Text>
+                · Microsoft Foundry:{' '}
+                <Link url="https://code.claude.com/docs/en/microsoft-foundry">https://code.claude.com/docs/en/microsoft-foundry</Link>
+              </Text>
+              <Text>
+                · Vertex AI:{' '}
+                <Link url="https://code.claude.com/docs/en/google-vertex-ai">https://code.claude.com/docs/en/google-vertex-ai</Link>
+              </Text>
+            </Box>
+            <Box marginTop={1}>
+              <Text dimColor>
+                Press <Text bold>Enter</Text> to go back to login options.
+              </Text>
+            </Box>
+          </Box>
+        </Box>
+      );
+
+    case 'waiting_for_login':
+      return (
+        <Box flexDirection="column" gap={1}>
+          {forcedMethodMessage ? (
+            <Box>
+              <Text dimColor>{forcedMethodMessage}</Text>
+            </Box>
+          ) : null}
+          {!showPastePrompt ? (
+            <Box>
+              <Spinner />
+              <Text>Opening browser to sign in…</Text>
+            </Box>
+          ) : null}
+          {showPastePrompt ? (
+            <Box>
+              <Text>{PASTE_HERE_MSG}</Text>
+              <TextInput
+                value={pastedCode}
+                onChange={setPastedCode}
+                onSubmit={value => handleSubmitCode(value, oauthStatus.url)}
+                cursorOffset={cursorOffset}
+                onChangeCursorOffset={setCursorOffset}
+                columns={textInputColumns}
+                mask="*"
+              />
+            </Box>
+          ) : null}
+        </Box>
+      );
+
+    case 'creating_api_key':
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box>
+            <Spinner />
+            <Text>Creating API key for Claude Code…</Text>
+          </Box>
+        </Box>
+      );
+
+    case 'about_to_retry':
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text color="permission">Retrying…</Text>
+        </Box>
+      );
+
+    case 'success':
+      return (
+        <Box flexDirection="column">
+          {mode === 'setup-token' && oauthStatus.token ? null : (
+            <>
+              {getOauthAccountInfo()?.emailAddress ? (
+                <Text dimColor>
+                  Logged in as <Text>{getOauthAccountInfo()?.emailAddress}</Text>
+                </Text>
+              ) : null}
+              <Text color="success">
+                Login successful. Press <Text bold>Enter</Text> to continue…
+              </Text>
+            </>
+          )}
+        </Box>
+      );
+
+    case 'error':
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text color="error">OAuth error: {oauthStatus.message}</Text>
+          {oauthStatus.toRetry ? (
+            <Box marginTop={1}>
+              <Text color="permission">
+                Press <Text bold>Enter</Text> to retry.
+              </Text>
+            </Box>
+          ) : null}
+        </Box>
+      );
+
+    default:
+      return null;
+  }
+}
