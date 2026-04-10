@@ -31,6 +31,27 @@ function formatPeakDay(dateStr: string): string {
     day: 'numeric'
   });
 }
+function getCacheHitRate(inputTokens: number, cacheHitTokens: number, cacheWriteTokens: number): number | null {
+  const totalPromptTokens = inputTokens + cacheHitTokens + cacheWriteTokens;
+  if (totalPromptTokens === 0) {
+    return null;
+  }
+  return cacheHitTokens / totalPromptTokens * 100;
+}
+function formatCacheHitRate(inputTokens: number, cacheHitTokens: number, cacheWriteTokens: number): string {
+  const cacheHitRate = getCacheHitRate(inputTokens, cacheHitTokens, cacheWriteTokens);
+  return cacheHitRate === null ? '-' : `${cacheHitRate.toFixed(1)}%`;
+}
+function getCacheStatus(inputTokens: number, cacheHitTokens: number, cacheWriteTokens: number): string {
+  const cacheHitRate = getCacheHitRate(inputTokens, cacheHitTokens, cacheWriteTokens);
+  if (cacheHitRate === null || cacheHitRate < 15) {
+    return 'Cold';
+  }
+  if (cacheHitRate < 50) {
+    return 'Warming';
+  }
+  return 'Hot';
+}
 type Props = {
   onClose: (result?: string, options?: {
     display?: CommandResultDisplay;
@@ -94,7 +115,7 @@ export function Stats(t0) {
   const allTimePromise = t1;
   let t2;
   if ($[1] === Symbol.for("react.memo_cache_sentinel")) {
-    t2 = <Box marginTop={1}><Spinner /><Text> Loading your Claude Code stats…</Text></Box>;
+    t2 = <Box marginTop={1}><Spinner /><Text> Loading your acode stats…</Text></Box>;
     $[1] = t2;
   } else {
     t2 = $[1];
@@ -242,7 +263,7 @@ function StatsContent(t0) {
   if (allTimeResult.type === "empty") {
     let t7;
     if ($[15] === Symbol.for("react.memo_cache_sentinel")) {
-      t7 = <Box marginTop={1}><Text color="warning">No stats available yet. Start using Claude Code!</Text></Box>;
+      t7 = <Box marginTop={1}><Text color="warning">No stats available yet. Start using acode!</Text></Box>;
       $[15] = t7;
     } else {
       t7 = $[15];
@@ -371,7 +392,13 @@ function OverviewTab({
   // Calculate favorite model and total tokens
   const modelEntries = Object.entries(stats.modelUsage).sort(([, a], [, b]) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens));
   const favoriteModel = modelEntries[0];
+  const topCacheModel = [...modelEntries].sort(([, a], [, b]) => b.cacheReadInputTokens - a.cacheReadInputTokens)[0];
   const totalTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.inputTokens + usage.outputTokens, 0);
+  const totalInputTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.inputTokens, 0);
+  const totalCacheHitTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.cacheReadInputTokens, 0);
+  const totalCacheWriteTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.cacheCreationInputTokens, 0);
+  const cacheHitRate = formatCacheHitRate(totalInputTokens, totalCacheHitTokens, totalCacheWriteTokens);
+  const cacheStatus = getCacheStatus(totalInputTokens, totalCacheHitTokens, totalCacheWriteTokens);
 
   // Memoize the factoid so it doesn't change when switching tabs
   const factoid = useMemo(() => generateFunFactoid(stats, totalTokens), [stats, totalTokens]);
@@ -452,6 +479,42 @@ function OverviewTab({
             Total tokens:{' '}
             <Text color="claude">{formatNumber(totalTokens)}</Text>
           </Text>
+        </Box>
+      </Box>
+      <Box flexDirection="row" gap={4}>
+        <Box flexDirection="column" width={28}>
+          <Text wrap="truncate">
+            Cache hit:{' '}
+            <Text color="claude">{formatNumber(totalCacheHitTokens)}</Text>
+          </Text>
+        </Box>
+        <Box flexDirection="column" width={28}>
+          <Text wrap="truncate">
+            Cache write:{' '}
+            <Text color="claude">{formatNumber(totalCacheWriteTokens)}</Text>
+          </Text>
+        </Box>
+      </Box>
+      <Box flexDirection="row" gap={4} marginBottom={1}>
+        <Box flexDirection="column" width={28}>
+          <Text wrap="truncate">
+            Cache hit rate:{' '}
+            <Text color="claude">{cacheHitRate}</Text>
+          </Text>
+        </Box>
+        <Box flexDirection="column" width={28}>
+          <Text wrap="truncate">
+            Cache state:{' '}
+            <Text color="claude">{cacheStatus}</Text>
+          </Text>
+        </Box>
+      </Box>
+      <Box flexDirection="row" gap={4} marginBottom={1}>
+        <Box flexDirection="column" width={28}>
+          {topCacheModel && topCacheModel[1].cacheReadInputTokens > 0 && <Text wrap="truncate">
+              Top cache model:{' '}
+              <Text color="claude">{renderModelName(topCacheModel[0])}</Text>
+            </Text>}
         </Box>
       </Box>
 
@@ -838,95 +901,29 @@ type ModelEntryProps = {
     inputTokens: number;
     outputTokens: number;
     cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
   };
   totalTokens: number;
 };
 function ModelEntry(t0) {
-  const $ = _c(21);
   const {
     model,
     usage,
     totalTokens
   } = t0;
   const modelTokens = usage.inputTokens + usage.outputTokens;
-  const t1 = modelTokens / totalTokens * 100;
-  let t2;
-  if ($[0] !== t1) {
-    t2 = t1.toFixed(1);
-    $[0] = t1;
-    $[1] = t2;
-  } else {
-    t2 = $[1];
-  }
-  const percentage = t2;
-  let t3;
-  if ($[2] !== model) {
-    t3 = renderModelName(model);
-    $[2] = model;
-    $[3] = t3;
-  } else {
-    t3 = $[3];
-  }
-  let t4;
-  if ($[4] !== t3) {
-    t4 = <Text bold={true}>{t3}</Text>;
-    $[4] = t3;
-    $[5] = t4;
-  } else {
-    t4 = $[5];
-  }
-  let t5;
-  if ($[6] !== percentage) {
-    t5 = <Text color="subtle">({percentage}%)</Text>;
-    $[6] = percentage;
-    $[7] = t5;
-  } else {
-    t5 = $[7];
-  }
-  let t6;
-  if ($[8] !== t4 || $[9] !== t5) {
-    t6 = <Text>{figures.bullet} {t4}{" "}{t5}</Text>;
-    $[8] = t4;
-    $[9] = t5;
-    $[10] = t6;
-  } else {
-    t6 = $[10];
-  }
-  let t7;
-  if ($[11] !== usage.inputTokens) {
-    t7 = formatNumber(usage.inputTokens);
-    $[11] = usage.inputTokens;
-    $[12] = t7;
-  } else {
-    t7 = $[12];
-  }
-  let t8;
-  if ($[13] !== usage.outputTokens) {
-    t8 = formatNumber(usage.outputTokens);
-    $[13] = usage.outputTokens;
-    $[14] = t8;
-  } else {
-    t8 = $[14];
-  }
-  let t9;
-  if ($[15] !== t7 || $[16] !== t8) {
-    t9 = <Text color="subtle">{"  "}In: {t7} · Out:{" "}{t8}</Text>;
-    $[15] = t7;
-    $[16] = t8;
-    $[17] = t9;
-  } else {
-    t9 = $[17];
-  }
-  let t10;
-  if ($[18] !== t6 || $[19] !== t9) {
-    t10 = <Box flexDirection="column">{t6}{t9}</Box>;
-    $[18] = t6;
-    $[19] = t9;
-    $[20] = t10;
-  } else {
-    t10 = $[20];
-  }
-  return t10;
+  const cacheHitRate = formatCacheHitRate(usage.inputTokens, usage.cacheReadInputTokens, usage.cacheCreationInputTokens);
+  const cacheStatus = getCacheStatus(usage.inputTokens, usage.cacheReadInputTokens, usage.cacheCreationInputTokens);
+  const percentage = (modelTokens / totalTokens * 100).toFixed(1);
+  const inputTokens = formatNumber(usage.inputTokens);
+  const outputTokens = formatNumber(usage.outputTokens);
+  const cacheHitTokens = formatNumber(usage.cacheReadInputTokens);
+  const cacheWriteTokens = formatNumber(usage.cacheCreationInputTokens);
+  return <Box flexDirection="column">
+      <Text>{figures.bullet} <Text bold={true}>{renderModelName(model)}</Text>{" "}<Text color="subtle">({percentage}%)</Text></Text>
+      <Text color="subtle" wrap="truncate">{"  "}In: {inputTokens} · Out: {outputTokens}</Text>
+      <Text color="subtle" wrap="truncate">{"  "}Cache: H {cacheHitTokens} · W {cacheWriteTokens} · {cacheHitRate} · {cacheStatus}</Text>
+    </Box>;
 }
 type ChartLegend = {
   model: string;
@@ -1117,6 +1114,10 @@ function renderOverviewToAnsi(stats: ClaudeCodeStats): string[] {
     // Assemble with colors applied to values only
     return label1 + h(v1) + ' '.repeat(spaceBetween) + label2 + h(v2);
   };
+  const single = (label: string, value: string): string => {
+    const formattedLabel = (label + ':').padEnd(COL1_LABEL_WIDTH);
+    return formattedLabel + h(value);
+  };
 
   // Heatmap - use fixed width for screenshot (56 = 52 weeks + 4 for day labels)
   if (stats.dailyActivity.length > 0) {
@@ -1129,11 +1130,20 @@ function renderOverviewToAnsi(stats: ClaudeCodeStats): string[] {
   // Calculate values
   const modelEntries = Object.entries(stats.modelUsage).sort(([, a], [, b]) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens));
   const favoriteModel = modelEntries[0];
+  const topCacheModel = [...modelEntries].sort(([, a], [, b]) => b.cacheReadInputTokens - a.cacheReadInputTokens)[0];
   const totalTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.inputTokens + usage.outputTokens, 0);
+  const totalInputTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.inputTokens, 0);
+  const totalCacheHitTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.cacheReadInputTokens, 0);
+  const totalCacheWriteTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.cacheCreationInputTokens, 0);
 
   // Row 1: Favorite model | Total tokens
   if (favoriteModel) {
     lines.push(row('Favorite model', renderModelName(favoriteModel[0]), 'Total tokens', formatNumber(totalTokens)));
+  }
+  lines.push(row('Cache hit', formatNumber(totalCacheHitTokens), 'Cache write', formatNumber(totalCacheWriteTokens)));
+  lines.push(row('Cache hit rate', formatCacheHitRate(totalInputTokens, totalCacheHitTokens, totalCacheWriteTokens), 'Cache state', getCacheStatus(totalInputTokens, totalCacheHitTokens, totalCacheWriteTokens)));
+  if (topCacheModel && topCacheModel[1].cacheReadInputTokens > 0) {
+    lines.push(single('Top cache model', renderModelName(topCacheModel[0])));
   }
   lines.push('');
 
@@ -1197,6 +1207,9 @@ function renderModelsToAnsi(stats: ClaudeCodeStats): string[] {
   }
   const favoriteModel = modelEntries[0];
   const totalTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.inputTokens + usage.outputTokens, 0);
+  const totalInputTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.inputTokens, 0);
+  const totalCacheHitTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.cacheReadInputTokens, 0);
+  const totalCacheWriteTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.cacheCreationInputTokens, 0);
 
   // Generate chart if we have data - use fixed width for screenshot
   const chartOutput = generateTokenChart(stats.dailyModelTokens, modelEntries.map(([model]) => model), 80 // Fixed width for screenshot
@@ -1213,6 +1226,7 @@ function renderModelsToAnsi(stats: ClaudeCodeStats): string[] {
 
   // Summary
   lines.push(`${figures.star} Favorite: ${chalk.magenta.bold(renderModelName(favoriteModel?.[0] || ''))} · ${figures.circle} Total: ${chalk.magenta(formatNumber(totalTokens))} tokens`);
+  lines.push(chalk.dim(`Cache: H ${formatNumber(totalCacheHitTokens)} · W ${formatNumber(totalCacheWriteTokens)} · ${formatCacheHitRate(totalInputTokens, totalCacheHitTokens, totalCacheWriteTokens)} · ${getCacheStatus(totalInputTokens, totalCacheHitTokens, totalCacheWriteTokens)}`));
   lines.push('');
 
   // Model breakdown - only show top 3 for screenshot
@@ -1222,6 +1236,7 @@ function renderModelsToAnsi(stats: ClaudeCodeStats): string[] {
     const percentage = (modelTokens / totalTokens * 100).toFixed(1);
     lines.push(`${figures.bullet} ${chalk.bold(renderModelName(model))} ${chalk.gray(`(${percentage}%)`)}`);
     lines.push(chalk.dim(`  In: ${formatNumber(usage.inputTokens)} · Out: ${formatNumber(usage.outputTokens)}`));
+    lines.push(chalk.dim(`  Cache: H ${formatNumber(usage.cacheReadInputTokens)} · W ${formatNumber(usage.cacheCreationInputTokens)} · ${formatCacheHitRate(usage.inputTokens, usage.cacheReadInputTokens, usage.cacheCreationInputTokens)} · ${getCacheStatus(usage.inputTokens, usage.cacheReadInputTokens, usage.cacheCreationInputTokens)}`));
   }
   return lines;
 }

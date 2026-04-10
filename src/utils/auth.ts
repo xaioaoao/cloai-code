@@ -53,6 +53,7 @@ import {
   isBareMode,
   isEnvTruthy,
   isRunningOnHomespace,
+  shouldDisableKeychain,
 } from './envUtils.js'
 import { errorMessage } from './errors.js'
 import { execSyncWithDefaults_DEPRECATED } from './execFileNoThrow.js'
@@ -84,7 +85,7 @@ const DEFAULT_API_KEY_HELPER_TTL = 5 * 60 * 1000
 /**
  * CCR and Claude Desktop spawn the CLI with OAuth and should never fall back
  * to the user's ~/.claude/settings.json API-key config (apiKeyHelper,
- * env.CLOAI_API_KEY, env.ANTHROPIC_AUTH_TOKEN). Those settings exist for
+ * env.ACODE_API_KEY, env.ANTHROPIC_AUTH_TOKEN). Those settings exist for
  * the user's terminal CLI, not managed sessions. Without this guard, a user
  * who runs `claude` in their terminal with an API key sees every CCD session
  * also use that key — and fail if it's stale/wrong-org.
@@ -162,7 +163,7 @@ export function isAnthropicAuthEnabled(): boolean {
   // local auth-injecting proxy. The launcher sets CLAUDE_CODE_OAUTH_TOKEN as a
   // placeholder iff the local side is a subscriber (so the remote includes the
   // oauth-2025 beta header to match what the proxy will inject). The remote's
-  // ~/.claude settings (apiKeyHelper, settings.env.CLOAI_API_KEY) MUST NOT
+  // ~/.claude settings (apiKeyHelper, settings.env.ACODE_API_KEY) MUST NOT
   // flip this — they'd cause a header mismatch with the proxy and a bogus
   // "invalid x-api-key" from the API. See src/ssh/sshAuthProxy.ts.
   if (process.env.ANTHROPIC_UNIX_SOCKET) {
@@ -185,7 +186,7 @@ export function isAnthropicAuthEnabled(): boolean {
     skipRetrievingKeyFromApiKeyHelper: true,
   })
   const hasExternalApiKey =
-    apiKeySource === 'CLOAI_API_KEY' || apiKeySource === 'apiKeyHelper'
+    apiKeySource === 'ACODE_API_KEY' || apiKeySource === 'apiKeyHelper'
 
   // Disable Anthropic auth if:
   // 1. Using 3rd party services (Bedrock/Vertex/Foundry)
@@ -260,7 +261,7 @@ export function getAuthTokenSource() {
 }
 
 export type ApiKeySource =
-  | 'CLOAI_API_KEY'
+  | 'ACODE_API_KEY'
   | 'apiKeyHelper'
   | '/login managed key'
   | 'none'
@@ -283,12 +284,12 @@ export function getAnthropicApiKeyWithSource(
   key: null | string
   source: ApiKeySource
 } {
-  // --bare: hermetic auth. Only CLOAI_API_KEY env or apiKeyHelper from
+  // --bare: hermetic auth. Only ACODE_API_KEY env or apiKeyHelper from
   // the --settings flag. Never touches keychain, config file, or approval
   // lists. 3P (Bedrock/Vertex/Foundry) uses provider creds, not this path.
   if (isBareMode()) {
-    if (process.env.CLOAI_API_KEY) {
-      return { key: process.env.CLOAI_API_KEY, source: 'CLOAI_API_KEY' }
+    if (process.env.ACODE_API_KEY) {
+      return { key: process.env.ACODE_API_KEY, source: 'ACODE_API_KEY' }
     }
     if (getConfiguredApiKeyHelper()) {
       return {
@@ -301,22 +302,24 @@ export function getAnthropicApiKeyWithSource(
     return { key: null, source: 'none' }
   }
 
-  // On homespace, don't use CLOAI_API_KEY (use Console key instead)
+  // On homespace, don't use ACODE_API_KEY (use Console key instead)
   // https://anthropic.slack.com/archives/C08428WSLKV/p1747331773214779
   const apiKeyEnv = isRunningOnHomespace()
     ? undefined
-    : process.env.CLOAI_API_KEY
+    : process.env.ACODE_API_KEY
 
   const persistedCustomApiKey =
     readCustomApiStorage().apiKey || getGlobalConfig().customApiEndpoint?.apiKey
   const effectiveApiKeyEnv = apiKeyEnv || persistedCustomApiKey
+  const isPersistedCustomApiKey =
+    !!persistedCustomApiKey && effectiveApiKeyEnv === persistedCustomApiKey
 
   // Always check for direct environment variable when the user ran claude --print.
   // This is useful for CI, etc.
   if (preferThirdPartyAuthentication() && effectiveApiKeyEnv) {
     return {
       key: effectiveApiKeyEnv,
-      source: 'CLOAI_API_KEY',
+      source: 'ACODE_API_KEY',
     }
   }
 
@@ -326,7 +329,7 @@ export function getAnthropicApiKeyWithSource(
     if (apiKeyFromFd) {
       return {
         key: apiKeyFromFd,
-        source: 'CLOAI_API_KEY',
+        source: 'ACODE_API_KEY',
       }
     }
 
@@ -336,14 +339,14 @@ export function getAnthropicApiKeyWithSource(
       !process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
     ) {
       throw new Error(
-        'CLOAI_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required',
+        'ACODE_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required',
       )
     }
 
     if (effectiveApiKeyEnv) {
       return {
         key: effectiveApiKeyEnv,
-        source: 'CLOAI_API_KEY',
+        source: 'ACODE_API_KEY',
       }
     }
 
@@ -353,16 +356,17 @@ export function getAnthropicApiKeyWithSource(
       source: 'none',
     }
   }
-  // Check for CLOAI_API_KEY before checking the apiKeyHelper or /login-managed key
+  // Check for ACODE_API_KEY before checking the apiKeyHelper or /login-managed key
   if (
     effectiveApiKeyEnv &&
-    getGlobalConfig().customApiKeyResponses?.approved?.includes(
-      normalizeApiKeyForConfig(effectiveApiKeyEnv),
-    )
+    (isPersistedCustomApiKey ||
+      getGlobalConfig().customApiKeyResponses?.approved?.includes(
+        normalizeApiKeyForConfig(effectiveApiKeyEnv),
+      ))
   ) {
     return {
       key: effectiveApiKeyEnv,
-      source: 'CLOAI_API_KEY',
+      source: 'ACODE_API_KEY',
     }
   }
 
@@ -371,7 +375,7 @@ export function getAnthropicApiKeyWithSource(
   if (apiKeyFromFd) {
     return {
       key: apiKeyFromFd,
-      source: 'CLOAI_API_KEY',
+      source: 'ACODE_API_KEY',
     }
   }
 
@@ -1110,7 +1114,7 @@ export const getApiKeyFromConfigOrMacOSKeychain = memoize(
   (): { key: string; source: ApiKeySource } | null => {
     if (isBareMode()) return null
     // TODO: migrate to SecureStorage
-    if (process.platform === 'darwin') {
+    if (process.platform === 'darwin' && !shouldDisableKeychain()) {
       // keychainPrefetch.ts fires this read at main.tsx top-level in parallel
       // with module imports. If it completed, use that instead of spawning a
       // sync `security` subprocess here (~33ms).
@@ -2027,7 +2031,7 @@ export async function validateForceLoginOrg(): Promise<OrgValidationResult> {
         `This machine requires organization ${requiredOrgUuid} but the profile could not be fetched.\n` +
         `This may be a network error, or the token may lack the user:profile scope required for\n` +
         `verification (tokens from 'claude setup-token' do not include this scope).\n` +
-        `Try again, or obtain a full-scope token via 'claude auth login'.`,
+        `Try again, or obtain a full-scope token via 'acode auth login'.`,
     }
   }
 
@@ -2057,7 +2061,7 @@ export async function validateForceLoginOrg(): Promise<OrgValidationResult> {
     message:
       `Your authentication token belongs to organization ${tokenOrgUuid},\n` +
       `but this machine requires organization ${requiredOrgUuid}.\n\n` +
-      `Please log in with the correct organization: claude auth login`,
+      `Please log in with the correct organization: acode auth login`,
   }
 }
 

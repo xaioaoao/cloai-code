@@ -1,120 +1,468 @@
-# cloaiCode
+# acode
 
 <div align="center">
-  <img src="preview.png" alt="cloaiCode Model Selector Preview" />
-  <h1>cloaiCode</h1>
-  <p><strong>面向多 Provider 原生接入增强的代码助手 CLI。</strong></p>
-  <p>重点解决第三方模型接入、配置隔离、代理环境与无头终端使用体验。</p>
+
+  <img src="preview.png" alt="acode Model Selector Preview" />
+  <h1>acode</h1>
+  <p><strong>面向多 Provider 原生接入增强的代码助手 CLI。🚀</strong></p>
+  <p>专业、务实、可落地。适合需要稳定接入第三方模型、代理服务与自定义网关的开发环境。🚀</p>
   <p>
-    <img src="https://img.shields.io/badge/runtime-Bun%20%2B%20Node-3b82f6" alt="Runtime" />
-    <img src="https://img.shields.io/badge/command-cloai-0f766e" alt="Command" />
-    <img src="https://img.shields.io/badge/config-~%2F.cloai-8b5cf6" alt="Config" />
-    <img src="https://img.shields.io/badge/providers-Anthropic%20%2F%20OpenAI%20%2F%20Gemini-10b981" alt="Providers" />
+    <a href="README.md"><img src="https://img.shields.io/badge/runtime-Bun%20%2B%20Node-3b82f6" alt="Runtime" /></a>
+    <a href="README.md"><img src="https://img.shields.io/badge/config-~%2F.acode-8b5cf6" alt="Config" /></a>
+    <a href="README.md"><img src="https://img.shields.io/badge/providers-Anthropic%20%2F%20OpenAI%20compatible-10b981" alt="Providers" /></a>
+    <a href="README.md"><img src="https://img.shields.io/badge/status-active%20fork-f59e0b" alt="Status" /></a>
   </p>
+
 </div>
 
-`cloaiCode` 是一个围绕多 Provider 原生接入持续增强的 CLI 分支。它的目标不是“在外面套一层切换器”，而是把 Provider 选择、鉴权、模型切换和协议适配直接做进 CLI，自带独立配置目录，适合本地开发、远程 SSH、容器和公司代理环境。
+---
 
-## 核心能力
+## 近期重要更新
 
-- 原生多 Provider：支持 Anthropic-compatible、OpenAI-compatible、Gemini-compatible。
-- 鉴权隔离：按 `Provider + authMode` 持久化，避免串配置、串 Token。
-- 独立配置目录：默认使用 `~/.cloai`，可与原版 `claude` 并存。
-- OpenAI 深度兼容：支持 `Chat Completions`、`Responses`、`OAuth`。
-- 终端友好：更适合服务器、无桌面环境和通过代理访问模型的场景。
+更新于 **2026 年 4 月 8 日**
 
-## 已验证接入
+- ⭐ 支持 Responses API 缓存命中，显著降低成本并提速。
+- 修复当 API BaseURL 使用 `IP + 端口` 形式时，兼容 Provider 被错误降级为 Anthropic 路径，导致请求失败的问题。
+- 修复多轮工具调用与 Plan Mode 自动切换场景下，API 请求异常失败的问题。
+- 新增独立 OpenAI 部署与隔离接入说明，见 [docs/OPENAI_SETUP_CN.md](docs/OPENAI_SETUP_CN.md)。
 
-| Provider 路线 | 已验证模型 | 接入方式 |
-| --- | --- | --- |
-| OpenAI-compatible | `gpt-5.4` | `Chat Completions` / `Responses` / `OAuth` |
-| Anthropic-compatible | `minimax-m2.7-highspeed` | Claude 风格兼容网关 |
-| Gemini-compatible | `gemini-3-flash-preview` / `gemini-3.1-pro-high` | Gemini 风格兼容网关 |
+更多历史更新与细节说明请跳转查看：[详细更新日志](#详细更新日志)
+
+---
+
+## ✨ 项目简介
+
+`acode` 是一个面向实际开发场景持续演进的 CLI 分支。我们的核心目标不是停留在“表面兼容”，而是让**第三方模型接入、代理转发、自定义鉴权与非官方部署环境**真正做到可用、好用、易维护。
+
+拒绝简单的外围套壳，摒弃对外部切换器的依赖，我们在原版代码的基础上直接深度扩展了**原生接入能力**。
+
+**典型适用场景：**
+
+  * 🖥️ 在本地终端中直接调用自定义模型与 Provider。
+  * 🌐 通过 Anthropic 兼容网关、OpenAI 兼容网关或 Gemini 兼容网关接入模型。
+  * 🔐 无缝切换 API Key、OAuth 及不同 Provider 的专属鉴权模式。
+  * 🧱 在无桌面环境（GUI）的服务器终端中高效完成配置与调用。
+  * ⚙️ 统一集中管理配置、登录态与模型选择等行为至独立目录。
+
+-----
+
+## 🎯 核心痛点与解决方案
+
+许多用户习惯通过 **CC Switch** 将第三方模型接入现有工具链，这固然可行；但 `acode` 更进一步，选择了体验更佳的**原生支持**。
+
+**原生支持的不可替代性在于：**
+
+  * ⚡ **链路更短，响应更快**：省去中间切换与转接层。
+  * 🧭 **闭环体验，直截了当**：Provider 选择、鉴权与模型切换均在工具内部一站式完成。
+  * 🛠️ **开箱即用，降低依赖**：无需额外部署切换器即可实现基础接入。
+  * 🖥️ **完美契合无头环境**：在无屏幕终端、远程 SSH 或容器环境中配置极其便利。
+  * 🔄 **配置统一，易于排障**：全局语义一致，问题定位更直观。
+
+如果你的主力工作台是**云主机、跳板机、远程开发容器**或**无 GUI 的 Linux / Windows Server 终端**，这种“原生接入”将为你带来断崖式的体验提升。✅
+
+-----
+
+## 🚀 核心增强特性
+
+相比上游版本，本项目目前重点重构并增强了以下能力：
+
+### 1\. 原生多 Provider 接入
+
+支持在程序内部直接配置并无缝切换不同的 Provider，彻底摆脱对外部切换层的依赖。
+
+### 2\. 原生多鉴权模式隔离
+
+针对不同 Provider，支持独立持久化存储其对应的鉴权方式。有效解决“相同 Provider 却被错误复用 authMode”的历史遗留问题。
+
+### 3\. 自定义模型与列表管理
+
+提供更便捷的非默认模型接入方案。支持轻松维护本地模型列表，并在交互进程中实现即时点选。
+
+### 4\. 深度优化的 OpenAI 兼容协议
+
+除了完善的 Anthropic 兼容路径外，本项目正在持续深化 OpenAI 侧的协议与路由能力，已支持：
+
+  * Chat Completions
+  * Responses
+  * OAuth
+
+### 5\. 独立配置目录与数据沙盒
+
+默认采用 `~/.acode` 作为全局配置根目录，从物理层面避免与其他同类工具发生配置、缓存或登录态的碰撞与污染。
+
+-----
+
+## ✅ 已验证模型与网关接入
+
+本项目最核心的能力，就是**通过兼容网关直接接入不同模型**，而不是把模型切换逻辑外包给外围工具。
+
+目前已经实际验证通过的主线路有三类：
+
+### 1\. Anthropic 兼容网关
+
+适用于提供 **Anthropic Messages / Claude 风格请求格式**的兼容服务、代理网关和第三方平台。
+
+**已验证模型：**
+
+| 模型名称 | 接入方式 | 推理努力 (Reasoning) | 思维链显示 |
+| :--- | :--- | :---: | :---: |
+| `minimax-m2.7-highspeed` | Anthropic-compatible gateway | √ | √ |
+
+**这一类通常可以承接的模型方向：**
+
+  * 任何被网关包装成 **Anthropic/Claude 兼容协议** 的第三方模型
+  * 各类自建中转、聚合网关、代理平台中映射成 Claude 风格 API 的模型
+  * 典型场景是：你不一定真的在调用 Anthropic 官方模型，但你可以通过 **Anthropic 兼容层**把目标模型接进 `acode`
+
+### 2\. OpenAI 兼容网关
+
+适用于提供 **Chat Completions / Responses / OAuth** 的 OpenAI 风格接口平台。这一条线路是当前最重要、也最值得详细写清楚的主线路之一。
+
+**已验证模型：**
+
+| 模型名称 | 接入方式 | 推理努力 (Reasoning) | 思维链显示 |
+| :--- | :--- | :---: | :---: |
+| `gpt-5.4` | OpenAI-compatible gateway via Chat Completions | √ | √ |
+| `gpt-5.4` | OpenAI-compatible gateway via Responses | √ | √ |
+| `gpt-5.4` | OpenAI-compatible gateway via OAuth | √ | √ |
+
+**这一类可以重点接入的模型方向：**
+
+  * `gpt-5.4`
+  * 其他被你的网关暴露为 **OpenAI Chat Completions** 接口的模型
+  * 其他被你的网关暴露为 **OpenAI Responses** 接口的模型
+  * 各类通过 OpenAI 风格 `baseURL + apiKey` 即可调用的第三方模型
+
+换句话说，只要你的平台能把目标模型包装成 **OpenAI 兼容协议**，`acode` 的目标就不是只接某一个固定模型，而是尽量把这类模型统一纳入原生选择、原生鉴权和原生路由里。
+
+### 3\. Gemini 兼容网关
+
+适用于提供 **Gemini 风格接口**或 Gemini CLI OAuth 路径的服务。这条线路现在也已经具备实际可用性，不应该被省略。
+
+> 公开分发版本默认不再内置 Gemini OAuth client id / secret；如果你需要 Gemini CLI OAuth，请通过环境变量 `GEMINI_OAUTH_CLIENT_ID` 和 `GEMINI_OAUTH_CLIENT_SECRET` 注入。
+
+**已验证模型：**
+
+| 模型名称 | 接入方式 | 推理努力 (Reasoning) | 思维链显示 |
+| :--- | :--- | :---: | :---: |
+| `gemini-3-flash-preview` | Gemini-compatible gateway | - | √ |
+| `gemini-3.1-pro-high` | Gemini-compatible gateway | - | √ |
+
+**这一类可以重点接入的模型方向：**
+
+  * `gemini-3-flash-preview`
+  * `gemini-3.1-pro-high`
+  * 其他被网关或 CLI 入口包装成 **Gemini-compatible** 请求路径的模型
+
+**一句话总结：**
+
+`acode` 当前不是只验证了“某几个模型名字”，而是已经把三条关键网关接入思路打通：
+
+  * **Anthropic 兼容网关接入第三方模型**
+  * **OpenAI 兼容网关接入第三方模型**
+  * **Gemini 兼容网关接入第三方模型**
+
+-----
+
+## 🧩 数据隔离与配置管理
+
+为了保证多环境下的稳定性，本项目将所有用户数据严格收口至：
+
+  * **配置根目录**：`~/.acode`
+  * **全局配置文件**：`~/.acode/.claude.json`
+
+**架构收益：**
+
+  * 杜绝历史登录态的互相污染。
+  * 防止不同网关或 Provider 的 Endpoint 发生串联。
+  * 确保模型列表、鉴权方式及缓存状态彼此独立。
+  * 为多环境（开发/生产）提供极其便捷的独立配置与备份手段。
+
+对于需要长期维护多套底层环境的开发者而言，这种物理隔离设计将显著降低日常排障成本。🧰
+
+-----
+
+## 📦 环境要求与安装
+
+在开始之前，请确保本机环境满足以下前置依赖：
+
+  * **Bun** \>= `1.3.5`
+  * **Node.js** \>= `24`
+
+### 安装依赖
+
+```bash
+bun install
+```
+
+**⚠️ 路径确认：**
+请务必确认 Bun 的可执行目录已加入当前 shell 的 `PATH` 环境变量中。否则，执行 `bun link` 后 `acode` 命令可能无法在全局生效。
+
+```bash
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+```
+
+如果你在 **Windows** 上使用 `PowerShell`，可改为：
+
+```powershell
+$env:BUN_INSTALL = "$HOME\.bun"
+$env:PATH = "$env:BUN_INSTALL\bin;$env:PATH"
+```
+
+如果希望对当前用户永久生效，可执行：
+
+```powershell
+[System.Environment]::SetEnvironmentVariable('BUN_INSTALL', "$HOME\.bun", 'User')
+[System.Environment]::SetEnvironmentVariable(
+  'PATH',
+  "$HOME\.bun\bin;" + [System.Environment]::GetEnvironmentVariable('PATH', 'User'),
+  'User'
+)
+```
+
+如果你使用的是 `cmd`，则对应写法为：
+
+```cmd
+set BUN_INSTALL=%USERPROFILE%\.bun
+set PATH=%BUN_INSTALL%\bin;%PATH%
+```
+
+永久设置可使用：
+
+```cmd
+setx BUN_INSTALL "%USERPROFILE%\.bun"
+setx PATH "%USERPROFILE%\.bun\bin;%PATH%"
+```
 
 说明：
 
-- OpenAI 线路已经验证 `gpt-5.4` 可正常交互。
-- `Responses API` 支持缓存命中，兼容 `prompt_cache_key`。
-- 公开分发版本不再内置 Gemini OAuth client id / secret；如需 Gemini CLI OAuth，请自行提供环境变量 `GEMINI_OAUTH_CLIENT_ID` 和 `GEMINI_OAUTH_CLIENT_SECRET`。
+  * `export` / `$env:` / `set` 只对当前终端会话生效
+  * `SetEnvironmentVariable(..., 'User')` / `setx` 会写入用户环境变量，需重新打开终端
+  * Windows 的 `PATH` 分隔符是 `;`，不是 `:`
 
-## 快速开始
+可通过以下命令进行环境自检：
 
-环境要求：
+```bash
+which bun
+echo $PATH
+```
 
-- `bun >= 1.3.5`
-- `node >= 24`
+-----
 
-安装：
+## 🛠️ 部署与使用方式
+
+### 方式一：源码全局部署（推荐）
+
+在仓库根目录依次执行：
+
+```bash
+bun install
+bun link
+```
+
+部署完成后，即可在任意终端通过全局命令启动：
+
+```bash
+acode
+```
+
+  * **包名**：`@acode/cli`
+  * **全局命令**：`acode`
+
+*(💡 排错指南：如果提示 `command not found`，通常是 `~/.bun/bin` 缺失于 `PATH` 中；如果提示找不到 `bun`，请检查入口脚本底部的 `#!/usr/bin/env bun` 解析路径是否正确。)*
+
+### 方式二：作为 Link 包引入项目
+
+将本 CLI 链接至全局：
+
+```bash
+bun link @acode/cli
+```
+
+或在目标项目的 `package.json` 中直接引用：
+
+```json
+{
+  "dependencies": {
+    "@acode/cli": "link:@acode/cli"
+  }
+}
+```
+
+-----
+
+## ▶️ 常用命令字典
+
+  * **开发模式热启动**：`bun run dev`
+  * **生产环境全局启动**：`acode`
+  * **查看当前版本号**：`bun run version`
+
+-----
+
+## 🔐 灵活的鉴权与登录体系
+
+让登录与鉴权在复杂网络环境中变得更灵活，是本项目的设计核心之一。根据你选择的 Provider，支持以下鉴权策略：
+
+### 1\. API Key 模式 (核心推荐)
+
+  * **适用场景**：Anthropic 兼容服务、OpenAI 兼容服务、各类代理/网关及第三方模型中转平台。
+  * **优势**：最稳定、最易于自动化集成。完美适配服务器、容器、远程终端等纯无头（Headless）环境。🔑
+
+### 2\. OAuth 模式
+
+  * **适用场景**：部分原生支持 OAuth 的 Provider 或特殊接入路径。
+  * **优势**：当运行环境已具备相应图形化或浏览器回调条件时，可作为 API Key 的补充方案，允许你使用你的 Codex 额度或 Gemini CLI 额度。
+
+### 3\. Provider 级独立鉴权沙盒
+
+系统会对 **“Provider + authMode”** 的组合关系进行严格的持久化绑定。彻底终结以下痛点：
+
+  * 切换 Provider 后错误沿用上一家的鉴权令牌。
+  * 同一 Provider 下，不同鉴权模式的数据被互相覆盖。
+  * 重启 CLI 后初始鉴权选项识别紊乱。
+
+这对于需要频繁在多家大模型服务商之间横跳的重度用户而言，是一项至关重要的体验提升。🧠
+
+-----
+
+## 🧭 Provider 路由与选择指南
+
+我们重构了 Provider 的选择逻辑，使其更加自然且意图明确。在实际配置中，你通常需要面对以下三个维度的选择：
+
+### 1\. Anthropic 兼容线路
+
+  * **目标场景**：自建网关、代理服务、第三方兼容平台，以及已验证的 `minimax-m2.7-highspeed` 接入。
+  * **特点**：追求极致稳定与极简路径的首选。
+
+### 2\. OpenAI 兼容线路
+
+  * **目标场景**：提供 Chat Completions / Responses 标准接口的平台，接入 `gpt-5.4` 等核心模型，或需要兼容 OAuth 工作流的场景。
+  * **典型模型方向**：`gpt-5.4`，以及任意被你的网关映射成 OpenAI 风格协议的第三方模型。
+
+### 3\. Gemini 兼容线路
+
+  * **目标场景**：提供 Gemini 风格接口或 Gemini CLI OAuth 工作流的平台，接入 `gemini-3-flash-preview`、`gemini-3.1-pro-high` 等模型。
+  * **特点**：适合需要接入 Gemini 系模型，但又希望统一纳入同一套 CLI 交互、配置与模型选择逻辑的场景。
+
+### 4\. 相同 Provider 的多路鉴权分化
+
+即使是同一个 Provider，只要支持多种鉴权模式，`acode` 就会在底层将其处理为**相互独立的配置实体**，绝不进行粗暴的状态混合。
+这使得“配置检查无误，但实际请求却走了错误鉴权通道”的诡异问题彻底成为历史。🔍
+
+-----
+
+## 🔄 深度 OpenAI 协议支持
+
+本项目绝非仅仅在前端界面增加一个 `Base URL` 输入框，而是在底层网络层面对齐了更为完整的 OpenAI 协议规范。当前重点支持：
+
+  * 全面接管 OpenAI Chat Completions 路由。
+  * 全面接管 OpenAI Responses 路由。
+  * 精准匹配相应的模型选择器与鉴权中间件。
+  * 针对不同协议路径的智能请求转发与载荷适配。
+
+将协议解析转化为 CLI 的“一等公民”能力，而非外围补丁，正是 `acode` 在多模型接入场景下远超传统外部切换方案的核心壁垒。🧱
+
+-----
+
+## 📚 推荐工作流
+
+### 首次拉取与初始化
 
 ```bash
 git clone <your-repo-url>
-cd cloai-code
+cd acode
 bun install
 bun link
-cloai
+acode
 ```
 
-常用命令：
+### 日常迭代与更新
 
-- 开发模式：`bun run dev`
-- 全局启动：`cloai`
-- 查看版本：`bun run version`
+```bash
+git pull
+bun install
+bun link
+acode
+```
 
-## 独立 OpenAI 部署
+这套标准工作流非常适合通过源码方式持续追踪上游更新的用户，也便于你随时在本地验证新模型、新 Provider 或新的底层协议支持。
 
-如果你想把 `cloai` 当成独立 OpenAI CLI 使用，并且不影响原版 `claude`，推荐直接按这份文档配置：
+-----
 
-- [docs/OPENAI_SETUP_CN.md](docs/OPENAI_SETUP_CN.md)
+## 🖥️ 为什么它是服务器环境的理想选择？
 
-这套部署方案的目标是：
+在真实的服务器生产环境中，传统的“外部切换器 + 图形登录 + 多层转发”方案往往会暴露诸多短板：
 
-- 默认走 `OpenAI / gpt-5.4`
-- 使用独立配置目录 `~/.cloai`
-- 不复用原版 `claude` 的 AWS Bedrock 配置
-- 兼容公司代理场景
-- 解决 `~/.bun/bin/cloai` 抢命中的问题
+  * 需额外引入并长期维护脆弱的切换组件。
+  * 登录流程强依赖 GUI 环境或繁琐的跨端人工拷贝。
+  * 配置文件散落在系统各处，排障链路极长。
+  * 在纯 CLI 工具（如 SSH / tmux / Docker）中即时切换 Provider 体验割裂。
 
-推荐流程：
+`acode` 坚持将核心操作收敛回 CLI 内部闭环，因此在以下场景中展现出压倒性的优势：
 
-1. 按文档创建包装脚本和 `~/.cloai/launch-settings.json`
-2. 执行 `codex login` 后，在 `cloai` 中运行 `/import-codex`
-3. 从 `~/` 启动 `cloai`，确认顶部模型显示为 `gpt-5.4`
-4. 发送 `Reply with exactly OK.` 验证链路是否通畅
+  * 纯无头 Linux 远程服务器
+  * Windows Server Core 终端
+  * WSL (Windows Subsystem for Linux)
+  * Docker / Dev Container 开发容器
+  * 基于 SSH 的极客运维流
 
-## 与原版 `claude` 的关系
+一言以蔽之：**系统少一层转接折腾，运行就少一分不确定性。** 🧩
 
-默认情况下，两者可以并存：
+-----
 
-- `cloai` 使用 `~/.cloai`
-- 原版 `claude` 可继续使用 `~/.claude`
-- 包装脚本只影响 `cloai`
+## ⚠️ 免责与声明
 
-如果你已经在原版 `claude` 中配置了企业 AWS Bedrock，这套独立 OpenAI 接入方案不会主动迁移或覆盖那部分设置。
+  * 本项目为一个处于持续演进中的非官方分支，不代表任何官方立场。
+  * 部分核心能力已在生产级场景验证稳定，但个别冷门协议与 Provider 适配仍在敏捷迭代中。
+  * 如果你追求对第三方模型接入过程的“绝对掌控权”，这个项目方向将比“单纯复刻官方行为”释放出更大的定制价值。
 
-## 近期更新
+-----
 
-更新于 `2026-04-08`：
+## 🙏 致谢
 
-- 支持 `Responses API` 缓存命中，降低成本并提升响应速度
-- 修复 `IP + 端口` 形式 `Base URL` 被错误降级为 Anthropic 路径的问题
-- 修复多轮工具调用与 Plan Mode 自动切换场景下的请求失败问题
-- 增补独立 OpenAI 接入与隔离部署文档
-- 公开分发版本移除了 Gemini OAuth 内置凭据，改为环境变量注入
+特别感谢 **doge-code** 项目及其作者提供的宝贵灵感与架构参考。他们在该领域的早期探索极具前瞻价值。
 
-## 适用场景
+  * 参考项目：[https://github.com/HELPMEEADICE/doge-code.git](https://github.com/HELPMEEADICE/doge-code.git)
 
-- 需要把第三方模型直接接进 CLI，而不是依赖外部切换器
-- 同时维护多套 Provider、不同认证方式和不同网关
-- 希望在 SSH、容器、远程开发机等无头环境稳定使用
-- 需要把 `cloai` 与原版 `claude` 隔离运行
-- 公司网络或代理环境对证书链有特殊要求
+-----
 
-## 免责声明
+## 📌 结语
 
-- 本项目是非官方分支，不代表任何官方立场。
-- 项目会持续演进；不同 Provider 的冷门边界情况仍可能继续调整。
-- 使用第三方网关、代理或自建服务时，请自行评估合规性与安全性。
+`acode` 的核心护城河，绝不仅仅是“能连上第三方模型这么简单”，而是：
 
-## 致谢
+  * ✅ **原生重构**的多 Provider 核心。
+  * ✅ **原生隔离**的多鉴权模式。
+  * ✅ **原生解析**的多元协议路径。
+  * ✅ **严谨验证**的关键模型组合矩阵。
+  * ✅ **完美适配**的纯服务器与无屏幕终端基因。
 
-- 参考项目：[doge-code](https://github.com/HELPMEEADICE/doge-code)
+如果你正在寻觅一个**更纯粹、更灵活、更能从容应对复杂网络与部署环境**的代码助手 CLI 方案，那么，欢迎使用 `acode`。🔥
+
+-----
+
+## 详细更新日志
+
+### 2026 年 4 月 8 日更新
+
+- 修复当 API BaseURL 使用 `IP + 端口` 形式时，兼容 Provider 被错误降级为 Anthropic 路径，导致请求失败的问题。
+- 修复多轮工具调用与 Plan Mode 自动切换场景下，API 请求异常失败的问题。
+
+### 2026 年 4 月 4 日更新
+
+- ⭐**支持 Responses API 的缓存命中，成本降低 90%，并提速**
+- 修复上下文穿插造成的回复不连续问题
+- 针对部分 OpenAI 兼容路由补充更稳的缓存键支持
+- 支持多模态以及图像粘贴到对话框
+
+![Responses API cache preview](https://github.com/user-attachments/assets/d34682db-88be-49f0-af6f-c1e249f1a8fe)
+
+注：`/chat/completions` 不支持缓存。请确保使用 `/responses` 方式请求，才能命中缓存。支持缓存的模型：
+- `gpt-5.4`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5.1`, `gpt-5.1-codex`, `gpt-5.1-codex-mini`, `gpt-5.1-chat-latest`, `gpt-5`, `gpt-5-codex`, `gpt-4.1`
+- 兼容 `prompt_cache_key` 的其他模型
+
+### 2026 年 4 月 3 日更新
+
+- Codex OAuth、Responses API、Gemini OAuth 和 Vertex API 支持
+- 支持设定推理强度
+- 支持思维链流式输出

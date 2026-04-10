@@ -1529,7 +1529,7 @@ export async function runBridgeLoop(
     !fatalExit
   ) {
     logger.logStatus(
-      `Resume this session by running \`cloai remote-control --continue\``,
+      `Resume this session by running \`acode remote-control --continue\``,
     )
     logForDebugging(
       `[bridge:shutdown] Skipping archive+deregister to allow resume of session ${initialSessionId}`,
@@ -1820,7 +1820,7 @@ export function parseArgs(args: string[]): ParsedArgs {
       createSessionInDir = false
     } else {
       return makeError(
-        `Unknown argument: ${arg}\nRun 'cloai remote-control --help' for usage.`,
+        `Unknown argument: ${arg}\nRun 'acode remote-control --help' for usage.`,
       )
     }
   }
@@ -1918,12 +1918,12 @@ async function printHelp(): Promise<void> {
 `
     : ''
   const help = `
-Remote Control - Connect your local environment to code.cloai.com
+Remote Control - Connect your local environment to code.acode.com
 
 USAGE
-  cloai remote-control [options]
+  acode remote-control [options]
 OPTIONS
-  --name <name>                    Name for the session (shown in code.cloai.com)
+  --name <name>                    Name for the session (shown in code.acode.com)
 ${
   feature('KAIROS')
     ? `  -c, --continue                   Resume the last session in this directory
@@ -1939,12 +1939,12 @@ ${
 ${serverOptions}
 DESCRIPTION
   Remote Control allows you to control sessions on your local device from
-  code.cloai.com (https://code.cloai.com). Run this command in the
-  directory you want to work in, then connect from the Cloai app or web.
+  code.acode.com (https://code.acode.com). Run this command in the
+  directory you want to work in, then connect from the acode app or web.
 ${serverDescription}
 NOTES
-  - You must be logged in with a Cloai account that has a subscription
-  - Run \`cloai\` first in the directory to accept the workspace trust dialog
+  - You must be logged in with a acode account that has a subscription
+  - Run \`acode\` first in the directory to accept the workspace trust dialog
 ${serverNote}`
   // biome-ignore lint/suspicious/noConsole: intentional help output
   console.log(help)
@@ -2086,7 +2086,7 @@ export async function bridgeMain(args: string[]): Promise<void> {
   if (!checkHasTrustDialogAccepted()) {
     // biome-ignore lint/suspicious/noConsole:: intentional console output
     console.error(
-      `Error: Workspace not trusted. Please run \`cloai\` in ${dir} first to review and accept the workspace trust dialog.`,
+      `Error: Workspace not trusted. Please run \`acode\` in ${dir} first to review and accept the workspace trust dialog.`,
     )
     // eslint-disable-next-line custom-rules/no-process-exit
     process.exit(1)
@@ -2122,7 +2122,7 @@ export async function bridgeMain(args: string[]): Promise<void> {
     })
     // biome-ignore lint/suspicious/noConsole:: intentional console output
     console.log(
-      '\nRemote Control lets you access this CLI session from the web (code.cloai.com)\nor the Cloai app, so you can pick up where you left off on any device.\n\nYou can disconnect remote access anytime by running /remote-control again.\n',
+      '\nRemote Control lets you access this CLI session from the web (code.acode.com)\nor the acode app, so you can pick up where you left off on any device.\n\nYou can disconnect remote access anytime by running /remote-control again.\n',
     )
     const answer = await new Promise<string>(resolve => {
       rl.question('Enable Remote Control? (y/n) ', resolve)
@@ -2154,7 +2154,7 @@ export async function bridgeMain(args: string[]): Promise<void> {
     if (!found) {
       // biome-ignore lint/suspicious/noConsole: intentional error output
       console.error(
-        `Error: No recent session found in this directory or its worktrees. Run \`cloai remote-control\` to start a new one.`,
+        `Error: No recent session found in this directory or its worktrees. Run \`acode remote-control\` to start a new one.`,
       )
       // eslint-disable-next-line custom-rules/no-process-exit
       process.exit(1)
@@ -2252,7 +2252,7 @@ export async function bridgeMain(args: string[]): Promise<void> {
     })
     // biome-ignore lint/suspicious/noConsole: intentional dialog output
     console.log(
-      `\nCloai Remote Control is launching in spawn mode which lets you create new sessions in this project from Cloai Code on Web or your Mobile app. Learn more here: https://code.cloai.com/docs/en/remote-control\n\n` +
+      `\nacode Remote Control is launching in spawn mode which lets you create new sessions in this project from acode on Web or your Mobile app. Learn more here: https://code.acode.com/docs/en/remote-control\n\n` +
         `Spawn mode for this project:\n` +
         `  [1] same-dir \u2014 sessions share the current directory (default)\n` +
         `  [2] worktree \u2014 each session gets an isolated git worktree\n\n` +
@@ -2392,7 +2392,7 @@ export async function bridgeMain(args: string[]): Promise<void> {
       }
       // biome-ignore lint/suspicious/noConsole: intentional error output
       console.error(
-        `Error: Session ${resumeSessionId} not found. It may have been archived or expired, or your login may have lapsed (run \`cloai /login\`).`,
+        `Error: Session ${resumeSessionId} not found. It may have been archived or expired, or your login may have lapsed (run \`acode /login\`).`,
       )
       // eslint-disable-next-line custom-rules/no-process-exit
       process.exit(1)
@@ -2830,7 +2830,7 @@ export async function runBridgeHeadless(
 
   if (!checkHasTrustDialogAccepted()) {
     throw new BridgeHeadlessPermanentError(
-      `Workspace not trusted: ${dir}. Run \`cloai\` in that directory first to accept the trust dialog.`,
+      `Workspace not trusted: ${dir}. Run \`acode\` in that directory first to accept the trust dialog.`,
     )
   }
 

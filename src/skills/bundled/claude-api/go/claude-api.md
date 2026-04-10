@@ -33,7 +33,7 @@ func main() {
 		panic(err)
 	}
 
-	req.Header.Set("x-api-key", os.Getenv("CLOAI_API_KEY"))
+	req.Header.Set("x-api-key", os.Getenv("ACODE_API_KEY"))
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("content-type", "application/json")
 

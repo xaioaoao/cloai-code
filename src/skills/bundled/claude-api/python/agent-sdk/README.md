@@ -1,6 +1,6 @@
 # Python Agent SDK
 
-Use the Python Agent SDK when you want Claude Code's agent loop, tools, hooks, and session handling from Python instead of calling the Messages API directly.
+Use the Python Agent SDK when you want acode's agent loop, tools, hooks, and session handling from Python instead of calling the Messages API directly.
 
 ## Install
 
@@ -8,7 +8,7 @@ Use the Python Agent SDK when you want Claude Code's agent loop, tools, hooks, a
 pip install claude-agent-sdk
 ```
 
-The SDK talks to a local Claude Code CLI, so the machine running your Python code also needs Claude Code installed and authenticated.
+The SDK talks to a local acode CLI, so the machine running your Python code also needs acode installed and authenticated.
 
 ## Choose the right entrypoint
 
@@ -64,7 +64,7 @@ asyncio.run(main())
 - Prefer `ClaudeSDKClient` when later prompts depend on earlier tool results.
 - Pass `cwd`, permission settings, allowed tools, hooks, and custom tools through `ClaudeAgentOptions`.
 - For incremental output, enable partial message streaming and handle `StreamEvent` messages.
-- For raw model calls without Claude Code tools, use the Anthropic Python SDK instead of the Agent SDK.
+- For raw model calls without acode tools, use the Anthropic Python SDK instead of the Agent SDK.
 
 ## Official references
 

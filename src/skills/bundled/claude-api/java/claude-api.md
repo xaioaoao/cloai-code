@@ -12,7 +12,7 @@ import java.net.http.HttpResponse;
 
 public class Main {
   public static void main(String[] args) throws Exception {
-    String apiKey = System.getenv("CLOAI_API_KEY");
+    String apiKey = System.getenv("ACODE_API_KEY");
     String json = """
       {
         "model": "{{SONNET_ID}}",

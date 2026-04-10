@@ -6,7 +6,7 @@ Use these when you want a raw HTTP baseline before moving to an SDK.
 
 ```bash
 curl https://api.anthropic.com/v1/messages \
-  --header "x-api-key: $CLOAI_API_KEY" \
+  --header "x-api-key: $ACODE_API_KEY" \
   --header "anthropic-version: 2023-06-01" \
   --header "content-type: application/json" \
   --data '{
@@ -22,7 +22,7 @@ curl https://api.anthropic.com/v1/messages \
 
 ```bash
 curl https://api.anthropic.com/v1/messages \
-  --header "x-api-key: $CLOAI_API_KEY" \
+  --header "x-api-key: $ACODE_API_KEY" \
   --header "anthropic-version: 2023-06-01" \
   --header "content-type: application/json" \
   --data '{
@@ -39,7 +39,7 @@ curl https://api.anthropic.com/v1/messages \
 
 ```bash
 curl https://api.anthropic.com/v1/messages \
-  --header "x-api-key: $CLOAI_API_KEY" \
+  --header "x-api-key: $ACODE_API_KEY" \
   --header "anthropic-version: 2023-06-01" \
   --header "content-type: application/json" \
   --data '{

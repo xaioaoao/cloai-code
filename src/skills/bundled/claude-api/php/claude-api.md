@@ -23,7 +23,7 @@ curl_setopt_array($ch, [
     CURLOPT_POST => true,
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_HTTPHEADER => [
-        'x-api-key: ' . getenv('CLOAI_API_KEY'),
+        'x-api-key: ' . getenv('ACODE_API_KEY'),
         'anthropic-version: 2023-06-01',
         'content-type: application/json',
     ],

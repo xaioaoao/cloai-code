@@ -60,4 +60,4 @@ Enable partial messages when building terminal or web interfaces that should ren
 ## When not to use the Agent SDK
 
 - Use the Anthropic Python SDK for plain `messages.create(...)` workflows.
-- Use the Messages API directly when you need raw API semantics, provider portability, or no Claude Code dependency.
+- Use the Messages API directly when you need raw API semantics, provider portability, or no acode dependency.

@@ -1,6 +1,7 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import addDir from './commands/add-dir/index.js'
 import addModel from './commands/add-model/index.js'
+import accounts from './commands/accounts/index.js'
 import importCodex from './commands/import-codex/index.js'
 import removeModel from './commands/remove-model/index.js'
 import autofixPr from './commands/autofix-pr/index.js'
@@ -198,7 +199,7 @@ import stats from './commands/stats/index.js'
 const usageReport: Command = {
   type: 'prompt',
   name: 'insights',
-  description: 'Generate a report analyzing your Cloai Code sessions',
+  description: 'Generate a report analyzing your acode sessions',
   contentLength: 0,
   progressMessage: 'analyzing your sessions',
   source: 'builtin',
@@ -266,6 +267,7 @@ export const INTERNAL_ONLY_COMMANDS = [
 const COMMANDS = memoize((): Command[] => [
   addDir,
   addModel,
+  accounts,
   importCodex,
   removeModel,
   advisor,

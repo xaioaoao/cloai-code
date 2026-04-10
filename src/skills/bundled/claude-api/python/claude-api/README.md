@@ -22,7 +22,7 @@ pip install anthropic[vertex]
 import os
 from anthropic import Anthropic
 
-client = Anthropic(api_key=os.environ["CLOAI_API_KEY"])
+client = Anthropic(api_key=os.environ["ACODE_API_KEY"])
 
 message = client.messages.create(
     model="claude-sonnet-4-5",
@@ -44,7 +44,7 @@ from anthropic import AsyncAnthropic
 
 
 async def main() -> None:
-    client = AsyncAnthropic(api_key=os.environ["CLOAI_API_KEY"])
+    client = AsyncAnthropic(api_key=os.environ["ACODE_API_KEY"])
     message = await client.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=1024,

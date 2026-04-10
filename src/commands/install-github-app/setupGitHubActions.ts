@@ -44,13 +44,13 @@ async function createWorkflowFile(
   if (secretName === 'CLAUDE_CODE_OAUTH_TOKEN') {
     // For OAuth tokens, use the claude_code_oauth_token parameter
     content = workflowContent.replace(
-      /anthropic_api_key: \$\{\{ secrets\.CLOAI_API_KEY \}\}/g,
+      /anthropic_api_key: \$\{\{ secrets\.ACODE_API_KEY \}\}/g,
       `claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`,
     )
-  } else if (secretName !== 'CLOAI_API_KEY') {
+  } else if (secretName !== 'ACODE_API_KEY') {
     // For other custom secret names, keep using anthropic_api_key parameter
     content = workflowContent.replace(
-      /anthropic_api_key: \$\{\{ secrets\.CLOAI_API_KEY \}\}/g,
+      /anthropic_api_key: \$\{\{ secrets\.ACODE_API_KEY \}\}/g,
       `anthropic_api_key: \${{ secrets.${secretName} }}`,
     )
   }
@@ -127,7 +127,7 @@ export async function setupGitHubActions(
     logEvent('tengu_setup_github_actions_started', {
       skip_workflow: skipWorkflow,
       has_api_key: !!apiKeyOrOAuthToken,
-      using_default_secret_name: secretName === 'CLOAI_API_KEY',
+      using_default_secret_name: secretName === 'ACODE_API_KEY',
       selected_claude_workflow: selectedWorkflows.includes('claude'),
       selected_claude_review_workflow:
         selectedWorkflows.includes('claude-review'),
@@ -233,7 +233,7 @@ export async function setupGitHubActions(
         workflows.push({
           path: '.github/workflows/claude-code-review.yml',
           content: CODE_REVIEW_PLUGIN_WORKFLOW_CONTENT,
-          message: 'Claude Code Review workflow',
+          message: 'acode Review workflow',
         })
       }
 
@@ -295,7 +295,7 @@ export async function setupGitHubActions(
       has_api_key: !!apiKeyOrOAuthToken,
       auth_type:
         authType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-      using_default_secret_name: secretName === 'CLOAI_API_KEY',
+      using_default_secret_name: secretName === 'ACODE_API_KEY',
       selected_claude_workflow: selectedWorkflows.includes('claude'),
       selected_claude_review_workflow:
         selectedWorkflows.includes('claude-review'),

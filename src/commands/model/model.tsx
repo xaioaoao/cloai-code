@@ -224,10 +224,10 @@ function persistSelectedConfiguredModel(
     providerForModel.authMode === 'gemini-cli-oauth'
   ) {
     delete process.env.ANTHROPIC_BASE_URL;
-    delete process.env.CLOAI_API_KEY;
+    delete process.env.ACODE_API_KEY;
   } else {
     process.env.ANTHROPIC_BASE_URL = providerForModel.baseURL ?? '';
-    process.env.CLOAI_API_KEY = providerForModel.apiKey ?? '';
+    process.env.ACODE_API_KEY = providerForModel.apiKey ?? '';
   }
   process.env.ANTHROPIC_MODEL = parsed.model;
   return parsed.model;
@@ -340,7 +340,7 @@ function ModelPickerWrapper({
       showFastModeNotice={showFastModeNotice}
       headerText={
         configuredOptions.length > 0
-          ? 'Switch between all configured models. Selecting one also switches the active provider for this session and future Cloai sessions.'
+          ? 'Switch between all configured models. Selecting one also switches the active provider for this session and future acode sessions.'
           : undefined
       }
       customOptions={configuredOptions.length > 0 ? configuredOptions : undefined}

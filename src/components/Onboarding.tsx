@@ -97,12 +97,12 @@ export function Onboarding({
   // Create the steps array - determine which steps to include based on reAuth and oauthEnabled
   const apiKeyNeedingApproval = useMemo(() => {
     // Add API key step if needed
-    // On homespace, CLOAI_API_KEY is preserved in process.env for child
-    // processes but ignored by Claude Code itself (see auth.ts).
-    if (!process.env.CLOAI_API_KEY || isRunningOnHomespace() || isUsingCompatibleCustomProvider()) {
+    // On homespace, ACODE_API_KEY is preserved in process.env for child
+    // processes but ignored by acode itself (see auth.ts).
+    if (!process.env.ACODE_API_KEY || isRunningOnHomespace() || isUsingCompatibleCustomProvider()) {
       return '';
     }
-    const customApiKeyTruncated = normalizeApiKeyForConfig(process.env.CLOAI_API_KEY);
+    const customApiKeyTruncated = normalizeApiKeyForConfig(process.env.ACODE_API_KEY);
     if (getCustomApiKeyStatus(customApiKeyTruncated) === 'new') {
       return customApiKeyTruncated;
     }
@@ -146,7 +146,7 @@ export function Onboarding({
     steps.push({
       id: 'terminal-setup',
       component: <Box flexDirection="column" gap={1} paddingLeft={1}>
-          <Text bold>Use Claude Code&apos;s terminal setup?</Text>
+          <Text bold>Use acode&apos;s terminal setup?</Text>
           <Box flexDirection="column" width={70} gap={1}>
             <Text>
               For the optimal coding experience, enable the recommended settings

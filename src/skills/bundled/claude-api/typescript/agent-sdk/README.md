@@ -1,6 +1,6 @@
 # TypeScript Agent SDK
 
-Use the Claude Agent SDK when you want Claude Code style agents from Node or Bun, not just raw model calls. Install the package, create an agent, then run tasks through the harness.
+Use the Claude Agent SDK when you want acode style agents from Node or Bun, not just raw model calls. Install the package, create an agent, then run tasks through the harness.
 
 ## Install
 
@@ -8,7 +8,7 @@ Use the Claude Agent SDK when you want Claude Code style agents from Node or Bun
 npm install @anthropic-ai/claude-agent-sdk
 ```
 
-Set `CLOAI_API_KEY` unless your runtime provides Claude Code style auth separately.
+Set `ACODE_API_KEY` unless your runtime provides acode style auth separately.
 
 ## Minimal flow
 
@@ -44,5 +44,5 @@ console.log(result.outputText)
 
 ## References
 
-- Anthropic docs: Claude Code SDK overview and API reference
+- Anthropic docs: acode SDK overview and API reference
 - GitHub: `anthropics/claude-agent-sdk-typescript`

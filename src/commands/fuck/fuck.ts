@@ -38,7 +38,7 @@ export const call: LocalCommandCall = async (_args, context) => {
   }))
 
   delete process.env.ANTHROPIC_BASE_URL
-  delete process.env.CLOAI_API_KEY
+  delete process.env.ACODE_API_KEY
   delete process.env.ANTHROPIC_MODEL
   clearCustomApiStorage()
 
@@ -47,6 +47,6 @@ export const call: LocalCommandCall = async (_args, context) => {
 
   return {
     type: 'text',
-    value: 'Claude Code local data wiped: auth, custom API config, and session history removed.',
+    value: 'acode local data wiped: auth, custom API config, and session history removed.',
   }
 }

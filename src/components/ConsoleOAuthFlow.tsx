@@ -14,7 +14,20 @@ import { OAuthService } from '../services/oauth/index.js';
 import { getOauthAccountInfo, validateForceLoginOrg } from '../utils/auth.js';
 import { getGlobalConfig, saveGlobalConfig } from '../utils/config.js';
 import { normalizeApiKeyForConfig } from '../utils/authPortable.js';
-import { type ProviderConfig, deriveProviderId, getProviderKeyFromConfig, normalizeCompatibleBaseURL, readCustomApiStorage, writeCustomApiStorage } from '../utils/customApiStorage.js';
+import {
+  applyProviderEnvironment,
+  buildStorageForActiveProvider,
+  type ProviderConfig,
+  deriveProviderId,
+  getActiveProviderConfig,
+  getProviderKeyFromConfig,
+  isProviderPoolEnabled,
+  isProviderPoolPaused,
+  normalizeCompatibleBaseURL,
+  readCustomApiStorage,
+  updateProviderInStorage,
+  writeCustomApiStorage,
+} from '../utils/customApiStorage.js';
 import { logError } from '../utils/log.js';
 import { getSettings_DEPRECATED } from '../utils/settings/settings.js';
 import { Select } from './CustomSelect/select.js';
@@ -311,7 +324,7 @@ export function ConsoleOAuthFlow({
   const [pastedCode, setPastedCode] = useState('');
   const [cursorOffset, setCursorOffset] = useState(0);
   const [customBaseURL, setCustomBaseURL] = useState(persistedProviderConfig?.baseURL ?? persistedCustomApiEndpoint.baseURL ?? process.env.ANTHROPIC_BASE_URL ?? '');
-  const [customApiKey, setCustomApiKey] = useState(persistedProviderConfig?.apiKey ?? persistedCustomApiEndpoint.apiKey ?? process.env.CLOAI_API_KEY ?? '');
+  const [customApiKey, setCustomApiKey] = useState(persistedProviderConfig?.apiKey ?? persistedCustomApiEndpoint.apiKey ?? process.env.ACODE_API_KEY ?? '');
   const [customModels, setCustomModels] = useState(persistedModelsInput);
   const [oauthService] = useState(() => new OAuthService());
   const [geminiOAuthService] = useState(() => new GeminiOAuthService());
@@ -403,6 +416,28 @@ export function ConsoleOAuthFlow({
     });
   }, [persistedProviders]);
 
+  const persistStorageToConfigAndEnv = useCallback((nextStorage: ReturnType<typeof readCustomApiStorage>) => {
+    const endpoint = nextStorage.providerKind
+      ? {
+          kind: nextStorage.providerKind,
+          provider: nextStorage.provider,
+          providerId: nextStorage.providerId,
+          baseURL: nextStorage.baseURL,
+          apiKey: nextStorage.apiKey,
+          model: nextStorage.model,
+          savedModels: nextStorage.savedModels,
+        }
+      : undefined;
+    writeCustomApiStorage(nextStorage);
+    saveGlobalConfig(current => ({
+      ...current,
+      customApiEndpoint: endpoint,
+    }));
+    const activeProvider = getActiveProviderConfig(nextStorage);
+    applyProviderEnvironment(activeProvider, nextStorage.activeModel);
+    refreshPersistedCustomApiEndpoint();
+  }, [refreshPersistedCustomApiEndpoint]);
+
   // Account management: confirm deletion and remove provider
   const handleDeleteAccountConfirm = useCallback(() => {
     if (safeOauthStatus.state !== 'confirm_delete') return;
@@ -431,7 +466,7 @@ export function ConsoleOAuthFlow({
             p => getProviderKeyFromConfig(p) === getProviderKeyFromConfig(activeProvider),
           )
         : remainingProviders[0];
-    const nextSnapshot = buildActiveSnapshot(next, next?.models[0]);
+    const nextActiveModel = next?.models[0];
     if (next) {
       setSelectedProviderKey({
         kind: next.kind,
@@ -452,34 +487,11 @@ export function ConsoleOAuthFlow({
       setCustomApiKey('');
       setCustomModels('');
     }
-    writeCustomApiStorage({
+    const nextStorage = buildStorageForActiveProvider({
       ...currentStorage,
-      activeProviderKey: next ? getProviderKeyFromConfig(next) : undefined,
       providers: remainingProviders.length > 0 ? remainingProviders : undefined,
-      activeProvider: next?.id,
-      activeModel: next?.models[0],
-      ...nextSnapshot,
-    });
-    saveGlobalConfig(current => ({
-      ...current,
-      customApiEndpoint: next ? nextSnapshot : undefined,
-    }));
-    refreshPersistedCustomApiEndpoint();
-    if (nextSnapshot.baseURL) {
-      process.env.ANTHROPIC_BASE_URL = nextSnapshot.baseURL;
-    } else {
-      delete process.env.ANTHROPIC_BASE_URL;
-    }
-    if (nextSnapshot.apiKey) {
-      process.env.CLOAI_API_KEY = nextSnapshot.apiKey;
-    } else {
-      delete process.env.CLOAI_API_KEY;
-    }
-    if (nextSnapshot.model) {
-      process.env.ANTHROPIC_MODEL = nextSnapshot.model;
-    } else {
-      delete process.env.ANTHROPIC_MODEL;
-    }
+    }, next, nextActiveModel);
+    persistStorageToConfigAndEnv(nextStorage);
     setOAuthStatus(
       remainingProviders.length > 0
         ? { state: 'manage_accounts' }
@@ -492,7 +504,122 @@ export function ConsoleOAuthFlow({
       },
       terminal,
     );
-  }, [safeOauthStatus, selectedProviderKey, terminal, refreshPersistedCustomApiEndpoint]);
+  }, [safeOauthStatus, selectedProviderKey, terminal, persistStorageToConfigAndEnv]);
+
+  const handleSetActiveAccount = useCallback((providerId: string) => {
+    const currentStorage = readCustomApiStorage();
+    const currentProviders = currentStorage.providers ?? [];
+    const provider = currentProviders.find(
+      p => getProviderKeyFromConfig(p) === providerId || p.id === providerId,
+    );
+    if (!provider) {
+      setOAuthStatus({ state: 'manage_accounts' });
+      return;
+    }
+    const nextModel = (currentStorage.activeModel && provider.models.includes(currentStorage.activeModel))
+      ? currentStorage.activeModel
+      : provider.models[0] ?? currentStorage.activeModel;
+    const nextStorage = buildStorageForActiveProvider(currentStorage, provider, nextModel);
+    persistStorageToConfigAndEnv(nextStorage);
+    setSelectedProviderKey({
+      kind: provider.kind,
+      id: provider.id,
+      authMode: provider.authMode,
+      baseURL: provider.baseURL,
+    });
+    setCompatibleApiProvider(provider.kind);
+    setCompatibleAuthMode(provider.authMode);
+    setCustomBaseURL(provider.baseURL ?? '');
+    setCustomApiKey(provider.apiKey ?? '');
+    setCustomModels(formatModelsInput(provider.models));
+    setOAuthStatus({ state: 'manage_accounts' });
+    void sendNotification(
+      {
+        message: `Set active account: ${provider.id}`,
+        notificationType: 'auth_success',
+      },
+      terminal,
+    );
+  }, [terminal, persistStorageToConfigAndEnv]);
+
+  const handleTogglePauseAccount = useCallback((providerId: string, paused: boolean) => {
+    const currentStorage = readCustomApiStorage();
+    const currentProviders = currentStorage.providers ?? [];
+    const provider = currentProviders.find(
+      p => getProviderKeyFromConfig(p) === providerId || p.id === providerId,
+    );
+    if (!provider) {
+      setOAuthStatus({ state: 'manage_accounts' });
+      return;
+    }
+    const providerKey = getProviderKeyFromConfig(provider);
+    const nextStorage = updateProviderInStorage(
+      currentStorage,
+      providerKey,
+      current => ({
+        ...current,
+        pool: {
+          ...current.pool,
+          paused,
+          ...(paused
+            ? {}
+            : {
+                status: 'active',
+                cooldownUntil: undefined,
+                resetAt: undefined,
+                lastError: undefined,
+                errorCount: 0,
+              }),
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+    writeCustomApiStorage(nextStorage);
+    refreshPersistedCustomApiEndpoint();
+    setOAuthStatus({ state: 'provider_actions', providerId });
+    void sendNotification(
+      {
+        message: `${paused ? 'Paused' : 'Resumed'} account: ${provider.id}`,
+        notificationType: 'auth_success',
+      },
+      terminal,
+    );
+  }, [terminal, refreshPersistedCustomApiEndpoint]);
+
+  const handleTogglePoolAccount = useCallback((providerId: string, enabled: boolean) => {
+    const currentStorage = readCustomApiStorage();
+    const currentProviders = currentStorage.providers ?? [];
+    const provider = currentProviders.find(
+      p => getProviderKeyFromConfig(p) === providerId || p.id === providerId,
+    );
+    if (!provider) {
+      setOAuthStatus({ state: 'manage_accounts' });
+      return;
+    }
+    const providerKey = getProviderKeyFromConfig(provider);
+    const nextStorage = updateProviderInStorage(
+      currentStorage,
+      providerKey,
+      current => ({
+        ...current,
+        pool: {
+          ...current.pool,
+          enabled,
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+    writeCustomApiStorage(nextStorage);
+    refreshPersistedCustomApiEndpoint();
+    setOAuthStatus({ state: 'provider_actions', providerId });
+    void sendNotification(
+      {
+        message: `${enabled ? 'Included' : 'Excluded'} account: ${provider.id}`,
+        notificationType: 'auth_success',
+      },
+      terminal,
+    );
+  }, [terminal, refreshPersistedCustomApiEndpoint]);
 
   // Log forced login method on mount
   useEffect(() => {
@@ -609,10 +736,10 @@ export function ConsoleOAuthFlow({
     });
     if (shouldClearEndpointCredentials) {
       delete process.env.ANTHROPIC_BASE_URL;
-      delete process.env.CLOAI_API_KEY;
+      delete process.env.ACODE_API_KEY;
     } else {
       process.env.ANTHROPIC_BASE_URL = providerConfig.baseURL ?? '';
-      process.env.CLOAI_API_KEY = providerConfig.apiKey ?? '';
+      process.env.ACODE_API_KEY = providerConfig.apiKey ?? '';
     }
     process.env.ANTHROPIC_MODEL = nextActiveModel ?? '';
     saveGlobalConfig(current => ({
@@ -924,7 +1051,7 @@ export function ConsoleOAuthFlow({
             ? 'Gemini CLI OAuth successful'
             : isOpenAIOAuth
               ? 'OpenAI OAuth successful'
-              : 'Claude Code login successful',
+              : 'acode login successful',
           notificationType: 'auth_success'
         }, terminal);
       }
@@ -1009,7 +1136,7 @@ export function ConsoleOAuthFlow({
             </Box>
           </Box>}
       <Box paddingLeft={1} flexDirection="column" gap={1}>
-        <OAuthStatusMessage oauthStatus={safeOauthStatus} mode={mode} startingMessage={startingMessage} forcedMethodMessage={forcedMethodMessage} showPastePrompt={showPastePrompt} pastedCode={pastedCode} setPastedCode={setPastedCode} cursorOffset={cursorOffset} setCursorOffset={setCursorOffset} textInputColumns={textInputColumns} handleSubmitCode={handleSubmitCode} setOAuthStatus={setOAuthStatus} setLoginWithClaudeAi={setLoginWithClaudeAi} customBaseURL={customBaseURL} customApiKey={customApiKey} customModels={customModels} setCustomBaseURL={setCustomBaseURL} setCustomApiKey={setCustomApiKey} setCustomModels={setCustomModels} isCustomInputPasting={isCustomInputPasting} setIsCustomInputPasting={setIsCustomInputPasting} handleSubmitCustomConfig={handleSubmitCustomConfig} startCompatibleApiConfig={startCompatibleApiConfig} compatibleApiProvider={compatibleApiProvider} persistedProviders={persistedProviders} persistedActiveProvider={persistedActiveProvider} persistedActiveProviderKey={persistedActiveProviderKey} handleOpenProviderActions={handleOpenProviderActions} handleDeleteAccountRequest={handleDeleteAccountRequest} handleDeleteAccountConfirm={handleDeleteAccountConfirm} onDone={onDone} />
+        <OAuthStatusMessage oauthStatus={safeOauthStatus} mode={mode} startingMessage={startingMessage} forcedMethodMessage={forcedMethodMessage} showPastePrompt={showPastePrompt} pastedCode={pastedCode} setPastedCode={setPastedCode} cursorOffset={cursorOffset} setCursorOffset={setCursorOffset} textInputColumns={textInputColumns} handleSubmitCode={handleSubmitCode} setOAuthStatus={setOAuthStatus} setLoginWithClaudeAi={setLoginWithClaudeAi} customBaseURL={customBaseURL} customApiKey={customApiKey} customModels={customModels} setCustomBaseURL={setCustomBaseURL} setCustomApiKey={setCustomApiKey} setCustomModels={setCustomModels} isCustomInputPasting={isCustomInputPasting} setIsCustomInputPasting={setIsCustomInputPasting} handleSubmitCustomConfig={handleSubmitCustomConfig} startCompatibleApiConfig={startCompatibleApiConfig} compatibleApiProvider={compatibleApiProvider} persistedProviders={persistedProviders} persistedActiveProviderKey={persistedActiveProviderKey} handleOpenProviderActions={handleOpenProviderActions} handleDeleteAccountRequest={handleDeleteAccountRequest} handleDeleteAccountConfirm={handleDeleteAccountConfirm} handleSetActiveAccount={handleSetActiveAccount} handleTogglePauseAccount={handleTogglePauseAccount} handleTogglePoolAccount={handleTogglePoolAccount} onDone={onDone} />
       </Box>
     </Box>;
 }
@@ -1043,6 +1170,9 @@ type OAuthStatusMessageProps = {
   handleOpenProviderActions: (providerId: string) => void;
   handleDeleteAccountRequest: (providerId: string) => void;
   handleDeleteAccountConfirm: () => void;
+  handleSetActiveAccount: (providerId: string) => void;
+  handleTogglePauseAccount: (providerId: string, paused: boolean) => void;
+  handleTogglePoolAccount: (providerId: string, enabled: boolean) => void;
   onDone: () => void;
 };
 
@@ -1076,6 +1206,9 @@ function OAuthStatusMessage({
   handleOpenProviderActions,
   handleDeleteAccountRequest,
   handleDeleteAccountConfirm,
+  handleSetActiveAccount,
+  handleTogglePauseAccount,
+  handleTogglePoolAccount,
   onDone,
 }: OAuthStatusMessageProps) {
   void isCustomInputPasting;
@@ -1091,7 +1224,7 @@ function OAuthStatusMessage({
           <Text dimColor>Select a provider to manage it.</Text>
           <Select
             defaultValue={persistedActiveProviderKey}
-            defaultFocusValue={persistedActiveProviderKey}
+            defaultFocusValue="__add_new__"
             options={[
               ...providers.map(provider => {
                 const accountName = provider.id || extractAccountNameFromUrl(provider.baseURL, provider.kind);
@@ -1111,11 +1244,16 @@ function OAuthStatusMessage({
                         : provider.authMode === 'vertex-compatible'
                           ? 'Vertex-compatible'
                           : 'API key';
+                const poolLabel = !isProviderPoolEnabled(provider)
+                  ? 'excluded'
+                  : isProviderPoolPaused(provider)
+                    ? 'paused'
+                    : 'active';
                 return {
                   label: (
                     <Text>
                       <Text bold>{accountName}</Text>
-                      <Text dimColor> · {typeLabel} · {authLabel} · {provider.models.length} model{provider.models.length !== 1 ? 's' : ''}</Text>
+                      <Text dimColor> · {typeLabel} · {authLabel} · pool:{poolLabel} · {provider.models.length} model{provider.models.length !== 1 ? 's' : ''}</Text>
                     </Text>
                   ),
                   value: getProviderKeyFromConfig(provider),
@@ -1147,16 +1285,34 @@ function OAuthStatusMessage({
     }
 
     case 'provider_actions': {
-      const provider = (persistedProviders ?? []).find(item => item.id === oauthStatus.providerId);
+      const provider = (persistedProviders ?? []).find(
+        item =>
+          getProviderKeyFromConfig(item) === oauthStatus.providerId ||
+          item.id === oauthStatus.providerId,
+      );
       const accountName = provider?.id ?? extractAccountNameFromUrl(provider?.baseURL, provider?.kind ?? 'openai-like');
+      const isPoolPaused = provider ? isProviderPoolPaused(provider) : false;
+      const isPoolEnabled = provider ? isProviderPoolEnabled(provider) : true;
       return (
         <Box flexDirection="column" gap={1} marginTop={1}>
           <Text bold>{accountName}</Text>
           <Text dimColor>Choose an action for this provider.</Text>
           <Select
-            defaultValue="logout"
-            defaultFocusValue="logout"
+            defaultValue="set_active"
+            defaultFocusValue="set_active"
             options={[
+              {
+                label: <Text>Set active</Text>,
+                value: 'set_active',
+              },
+              {
+                label: <Text>{isPoolPaused ? 'Resume' : 'Pause'}</Text>,
+                value: 'toggle_pause',
+              },
+              {
+                label: <Text>{isPoolEnabled ? 'Exclude from pool' : 'Include in pool'}</Text>,
+                value: 'toggle_pool',
+              },
               {
                 label: <Text>Logout</Text>,
                 value: 'logout',
@@ -1169,6 +1325,18 @@ function OAuthStatusMessage({
             onChange={value => {
               if (value === 'back') {
                 setOAuthStatus({ state: 'manage_accounts' });
+                return;
+              }
+              if (value === 'set_active') {
+                handleSetActiveAccount(oauthStatus.providerId);
+                return;
+              }
+              if (value === 'toggle_pause') {
+                handleTogglePauseAccount(oauthStatus.providerId, !isPoolPaused);
+                return;
+              }
+              if (value === 'toggle_pool') {
+                handleTogglePoolAccount(oauthStatus.providerId, !isPoolEnabled);
                 return;
               }
               handleDeleteAccountRequest(oauthStatus.providerId);
@@ -1435,7 +1603,7 @@ function OAuthStatusMessage({
     }
 
     case 'idle': {
-      const message = startingMessage ?? 'Claude Code can use your Claude subscription or API billing through your Console account.';
+      const message = startingMessage ?? 'acode can use your Claude subscription or API billing through your Console account.';
 
       return (
         <Box flexDirection="column" gap={1} marginTop={1}>
@@ -1501,7 +1669,7 @@ function OAuthStatusMessage({
           <Text bold>Using 3rd-party platforms</Text>
           <Box flexDirection="column" gap={1}>
             <Text>
-              Claude Code supports Amazon Bedrock, Microsoft Foundry, and Vertex AI. Set the required environment variables, then restart Claude Code.
+              acode supports Amazon Bedrock, Microsoft Foundry, and Vertex AI. Set the required environment variables, then restart acode.
             </Text>
             <Text>If you are part of an enterprise organization, contact your administrator for setup instructions.</Text>
             <Box flexDirection="column" marginTop={1}>
@@ -1564,7 +1732,7 @@ function OAuthStatusMessage({
         <Box flexDirection="column" gap={1}>
           <Box>
             <Spinner />
-            <Text>Creating API key for Claude Code…</Text>
+            <Text>Creating API key for acode…</Text>
           </Box>
         </Box>
       );

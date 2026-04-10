@@ -89,13 +89,19 @@ export async function installOAuthTokens(
         p.id === previousStorage.providerId &&
         p.authMode === 'oauth',
     )
-    const targetProvider =
-      activeOpenAIProvider ??
-      fallbackOpenAIProvider ??
-      providers.find(p => p.kind === 'openai-like' && p.authMode === 'oauth')
-
     // Extract account ID from JWT and fetch available models
     const accountId = extractAccountIdFromToken(tokens.accessToken ?? '')
+    const existingOpenAIProviderByAccountId = accountId
+      ? providers.find(p => {
+          if (p.kind !== 'openai-like' || p.authMode !== 'oauth') return false
+          const oauth = p.oauth as { accountId?: string } | undefined
+          return oauth?.accountId === accountId
+        })
+      : undefined
+    const shouldCreateNewProvider =
+      accountId !== undefined &&
+      accountId !== '' &&
+      existingOpenAIProviderByAccountId === undefined
     let fetchedModels: string[] | undefined
     if (accountId && tokens.accessToken) {
       try {
@@ -120,6 +126,29 @@ export async function installOAuthTokens(
           : undefined,
       accountId,
     }
+    const nextOpenAIProviderId = (): string => {
+      const existingIds = new Set(providers.map(p => p.id))
+      if (!existingIds.has('openai')) return 'openai'
+      let index = 2
+      while (existingIds.has(`openai-${index}`)) {
+        index += 1
+      }
+      return `openai-${index}`
+    }
+    const appendedProvider = {
+      id: nextOpenAIProviderId(),
+      kind: 'openai-like' as const,
+      authMode: 'oauth' as const,
+      apiKey: tokens.accessToken,
+      models: fetchedModels ?? [],
+      oauth: oauthData,
+    }
+    const targetProvider = shouldCreateNewProvider
+      ? undefined
+      : (existingOpenAIProviderByAccountId ??
+          activeOpenAIProvider ??
+          fallbackOpenAIProvider ??
+          providers.find(p => p.kind === 'openai-like' && p.authMode === 'oauth'))
     const updatedProviders = targetProvider
       ? providers.map(p =>
           p === targetProvider
@@ -139,24 +168,10 @@ export async function installOAuthTokens(
               }
             : p,
         )
-      : [
-          ...providers,
-          {
-            id: 'openai',
-            kind: 'openai-like' as const,
-            authMode: 'oauth' as const,
-            apiKey: tokens.accessToken,
-            models: fetchedModels ?? [],
-            oauth: oauthData,
-          },
-        ]
+      : [...providers, appendedProvider]
 
     const resolvedModels = fetchedModels ?? targetProvider?.models
-    const effectiveProvider = targetProvider ?? {
-      id: 'openai',
-      kind: 'openai-like' as const,
-      authMode: 'oauth' as const,
-    }
+    const effectiveProvider = targetProvider ?? appendedProvider
     const activeModel =
       previousStorage.activeProvider === effectiveProvider.id
         ? previousStorage.activeModel
@@ -208,7 +223,7 @@ export async function installOAuthTokens(
     }))
 
     // Also apply to current process env
-    process.env.CLOAI_API_KEY = tokens.accessToken
+    process.env.ACODE_API_KEY = tokens.accessToken
     process.env.ANTHROPIC_BASE_URL = normalizedOpenAIStorage.baseURL ?? ''
     process.env.ANTHROPIC_MODEL = normalizedOpenAIStorage.model ?? ''
     clearOAuthTokenCache()
@@ -313,7 +328,7 @@ export async function installOAuthTokens(
       },
     }))
 
-    delete process.env.CLOAI_API_KEY
+    delete process.env.ACODE_API_KEY
     delete process.env.ANTHROPIC_BASE_URL
     process.env.ANTHROPIC_MODEL = normalizedGeminiStorage.model ?? ''
     clearOAuthTokenCache()
@@ -507,7 +522,7 @@ export async function authStatus(opts: {
   const { source: authTokenSource, hasToken } = getAuthTokenSource()
   const { source: apiKeySource } = getAnthropicApiKeyWithSource()
   const hasApiKeyEnvVar =
-    !!process.env.CLOAI_API_KEY && !isRunningOnHomespace()
+    !!process.env.ACODE_API_KEY && !isRunningOnHomespace()
   const oauthAccount = getOauthAccountInfo()
   const subscriptionType = getSubscriptionType()
   const using3P = isUsing3PServices()
@@ -525,7 +540,7 @@ export async function authStatus(opts: {
     authMethod = 'api_key_helper'
   } else if (authTokenSource !== 'none') {
     authMethod = 'oauth_token'
-  } else if (apiKeySource === 'CLOAI_API_KEY' || hasApiKeyEnvVar) {
+  } else if (apiKeySource === 'ACODE_API_KEY' || hasApiKeyEnvVar) {
     authMethod = 'api_key'
   } else if (apiKeySource === '/login managed key') {
     authMethod = 'claude.ai'
@@ -555,11 +570,11 @@ export async function authStatus(opts: {
       }
     }
     if (!hasAuthProperty && hasApiKeyEnvVar) {
-      process.stdout.write('API key: CLOAI_API_KEY\n')
+      process.stdout.write('API key: ACODE_API_KEY\n')
     }
     if (!loggedIn) {
       process.stdout.write(
-        'Not logged in. Run claude auth login to authenticate.\n',
+        'Not logged in. Run acode auth login to authenticate.\n',
       )
     }
   } else {
@@ -568,7 +583,7 @@ export async function authStatus(opts: {
       apiKeySource !== 'none'
         ? apiKeySource
         : hasApiKeyEnvVar
-          ? 'CLOAI_API_KEY'
+          ? 'ACODE_API_KEY'
           : null
     const output: Record<string, string | boolean | null> = {
       loggedIn,

@@ -8,19 +8,35 @@ import type {
   BetaUsage,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { createHash } from 'crypto'
-import { type ProviderConfig, getActiveProviderConfig, readCustomApiStorage, writeCustomApiStorage } from '../../utils/customApiStorage.js'
+import {
+  type ProviderConfig,
+  findProviderByKey,
+  getActiveProviderConfig,
+  getProviderKeyFromConfig,
+  readCustomApiStorage,
+  writeCustomApiStorage,
+} from '../../utils/customApiStorage.js'
 import { logEvent } from '../analytics/index.js'
 import { splitSysPromptPrefix } from '../../utils/api.js'
 import { getOpenAIReasoningConfig } from '../../utils/modelReasoning.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { fetchOpenAICodexModels, refreshOpenAIOAuthToken } from '../oauth/client.js'
 
-export async function refreshOpenAIProviderOAuthIfNeeded(): Promise<ProviderConfig> {
+export async function refreshOpenAIProviderOAuthIfNeeded(
+  providerKey?: string,
+): Promise<ProviderConfig> {
   const storage = readCustomApiStorage()
-  const provider = getActiveProviderConfig(storage)
+  const provider = providerKey
+    ? findProviderByKey(storage, providerKey)
+    : getActiveProviderConfig(storage)
   if (!provider || provider.kind !== 'openai-like' || provider.authMode !== 'oauth') {
     throw new Error('Active OpenAI OAuth provider not found')
   }
+  const normalizedProviderKey = getProviderKeyFromConfig(provider)
+  const activeProvider = getActiveProviderConfig(storage)
+  const isActiveProvider =
+    activeProvider !== undefined &&
+    getProviderKeyFromConfig(activeProvider) === normalizedProviderKey
   const oauth = provider.oauth as { accessToken?: string; refreshToken?: string; expiresAt?: number; accountId?: string } | undefined
   // No oauth metadata stored (legacy) — use apiKey as-is
   if (!oauth?.accessToken) {
@@ -53,9 +69,7 @@ export async function refreshOpenAIProviderOAuthIfNeeded(): Promise<ProviderConf
   }
 
   const providers = (storage.providers ?? []).map(item =>
-    item.kind === provider.kind &&
-    item.id === provider.id &&
-    item.authMode === provider.authMode
+    getProviderKeyFromConfig(item) === normalizedProviderKey
       ? {
           ...item,
           apiKey: refreshed.accessToken,
@@ -72,18 +86,22 @@ export async function refreshOpenAIProviderOAuthIfNeeded(): Promise<ProviderConf
 
   writeCustomApiStorage({
     ...storage,
-    apiKey: refreshed.accessToken,
-    savedModels: freshModels ?? storage.savedModels,
+    ...(isActiveProvider
+      ? {
+          apiKey: refreshed.accessToken,
+          savedModels: freshModels ?? storage.savedModels,
+        }
+      : {}),
     providers,
   })
 
   // Update process env so downstream code picks up the new token
-  process.env.CLOAI_API_KEY = refreshed.accessToken
+  if (isActiveProvider) {
+    process.env.ACODE_API_KEY = refreshed.accessToken
+  }
 
   const nextProvider = providers.find(item =>
-    item.kind === provider.kind &&
-    item.id === provider.id &&
-    item.authMode === provider.authMode,
+    getProviderKeyFromConfig(item) === normalizedProviderKey,
   )
   if (!nextProvider) {
     throw new Error('Failed to persist refreshed OpenAI OAuth tokens')
@@ -113,6 +131,28 @@ type OpenAIToolCall = {
   function: {
     name: string
     arguments: string
+  }
+}
+
+export class OpenAICompatRequestError extends Error {
+  status: number
+  responseText: string
+  endpoint: string
+  responseHeaders: Record<string, string>
+
+  constructor(input: {
+    status: number
+    responseText: string
+    endpoint: string
+    responseHeaders: Record<string, string>
+    message: string
+  }) {
+    super(input.message)
+    this.name = 'OpenAICompatRequestError'
+    this.status = input.status
+    this.responseText = input.responseText
+    this.endpoint = input.endpoint
+    this.responseHeaders = input.responseHeaders
   }
 }
 
@@ -390,7 +430,7 @@ function splitOpenAISystemPrompt(system?: string | Array<{ type?: string; text?:
       block =>
         block &&
         !block.startsWith('x-anthropic-billing-header') &&
-        !block.startsWith('You are Claude Code'),
+        !block.startsWith('You are acode'),
     )
     .join('\n\n')
 
@@ -773,6 +813,14 @@ function toBlocks(content: BetaMessageParam['content']): AnyBlock[] {
   return Array.isArray(content)
     ? (content as unknown as AnyBlock[])
     : [{ type: 'text', text: content }]
+}
+
+function headersToRecord(headers: Headers): Record<string, string> {
+  const output: Record<string, string> = {}
+  headers.forEach((value, key) => {
+    output[key.toLowerCase()] = value
+  })
+  return output
 }
 
 function toDataUrl(mediaType: string, data: string): string {
@@ -1265,8 +1313,9 @@ export async function createOpenAICompatStream(
   request: OpenAIChatRequest,
   signal?: AbortSignal,
 ): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+  const endpoint = joinBaseUrl(config.baseURL, '/v1/chat/completions')
   const response = await (config.fetch ?? globalThis.fetch)(
-    joinBaseUrl(config.baseURL, '/v1/chat/completions'),
+    endpoint,
     {
       method: 'POST',
       signal,
@@ -1286,9 +1335,13 @@ export async function createOpenAICompatStream(
     } catch {
       responseText = ''
     }
-    throw new Error(
-      `OpenAI compatible request failed with status ${response.status}${responseText ? `: ${responseText}` : ''}`,
-    )
+    throw new OpenAICompatRequestError({
+      status: response.status,
+      responseText,
+      endpoint,
+      responseHeaders: headersToRecord(response.headers),
+      message: `OpenAI compatible request failed with status ${response.status}${responseText ? `: ${responseText}` : ''}`,
+    })
   }
 
   return response.body.getReader()
@@ -1299,8 +1352,9 @@ export async function createOpenAICodexStream(
   request: OpenAICodexRequest,
   signal?: AbortSignal,
 ): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+  const endpoint = resolveCodexUrl(config.baseURL)
   const response = await (config.fetch ?? globalThis.fetch)(
-    resolveCodexUrl(config.baseURL),
+    endpoint,
     {
       method: 'POST',
       signal,
@@ -1320,9 +1374,13 @@ export async function createOpenAICodexStream(
     } catch {
       responseText = ''
     }
-    throw new Error(
-      `OpenAI Codex request failed with status ${response.status}${responseText ? `: ${responseText}` : ''}`,
-    )
+    throw new OpenAICompatRequestError({
+      status: response.status,
+      responseText,
+      endpoint,
+      responseHeaders: headersToRecord(response.headers),
+      message: `OpenAI Codex request failed with status ${response.status}${responseText ? `: ${responseText}` : ''}`,
+    })
   }
 
   return response.body.getReader()
@@ -1333,8 +1391,9 @@ export async function createOpenAIResponsesStream(
   request: OpenAIResponsesRequest,
   signal?: AbortSignal,
 ): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+  const endpoint = joinBaseUrl(config.baseURL, '/v1/responses')
   const response = await (config.fetch ?? globalThis.fetch)(
-    joinBaseUrl(config.baseURL, '/v1/responses'),
+    endpoint,
     {
       method: 'POST',
       signal,
@@ -1354,9 +1413,13 @@ export async function createOpenAIResponsesStream(
     } catch {
       responseText = ''
     }
-    throw new Error(
-      `OpenAI Responses request failed with status ${response.status}${responseText ? `: ${responseText}` : ''}`,
-    )
+    throw new OpenAICompatRequestError({
+      status: response.status,
+      responseText,
+      endpoint,
+      responseHeaders: headersToRecord(response.headers),
+      message: `OpenAI Responses request failed with status ${response.status}${responseText ? `: ${responseText}` : ''}`,
+    })
   }
 
   return response.body.getReader()

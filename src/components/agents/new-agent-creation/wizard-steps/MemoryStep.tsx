@@ -37,7 +37,7 @@ export function MemoryStep() {
   let t1;
   if ($[1] !== isUserScope) {
     t1 = isUserScope ? [{
-      label: "User scope (~/.cloai/agent-memory/) (Recommended)",
+      label: "User scope (~/.acode/agent-memory/) (Recommended)",
       value: "user"
     }, {
       label: "None (no persistent memory)",
@@ -55,7 +55,7 @@ export function MemoryStep() {
       label: "None (no persistent memory)",
       value: "none"
     }, {
-      label: "User scope (~/.cloai/agent-memory/)",
+      label: "User scope (~/.acode/agent-memory/)",
       value: "user"
     }, {
       label: "Local scope (.claude/agent-memory-local/)",

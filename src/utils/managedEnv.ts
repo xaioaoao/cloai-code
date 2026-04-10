@@ -28,7 +28,7 @@ function withoutSSHTunnelVars(
   const {
     ANTHROPIC_UNIX_SOCKET: _1,
     ANTHROPIC_BASE_URL: _2,
-    CLOAI_API_KEY: _3,
+    ACODE_API_KEY: _3,
     ANTHROPIC_AUTH_TOKEN: _4,
     CLAUDE_CODE_OAUTH_TOKEN: _5,
     ...rest
@@ -217,7 +217,7 @@ function applyPersistedCustomApiEndpointEnv(): void {
     activeProviderConfig.authMode === 'gemini-cli-oauth'
   ) {
     delete process.env.ANTHROPIC_BASE_URL
-    delete process.env.CLOAI_API_KEY
+    delete process.env.ACODE_API_KEY
     if (resolvedModel) {
       process.env.ANTHROPIC_MODEL = resolvedModel
     } else {
@@ -233,9 +233,9 @@ function applyPersistedCustomApiEndpointEnv(): void {
   }
 
   if (resolvedApiKey) {
-    process.env.CLOAI_API_KEY = resolvedApiKey
+    process.env.ACODE_API_KEY = resolvedApiKey
   } else {
-    delete process.env.CLOAI_API_KEY
+    delete process.env.ACODE_API_KEY
   }
 
   if (resolvedModel) {

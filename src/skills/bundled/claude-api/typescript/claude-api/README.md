@@ -8,7 +8,7 @@ Use `@anthropic-ai/sdk` for direct access to the Messages API from TypeScript.
 npm install @anthropic-ai/sdk
 ```
 
-Set `CLOAI_API_KEY` in the environment.
+Set `ACODE_API_KEY` in the environment.
 
 ## Basic request
 
@@ -16,7 +16,7 @@ Set `CLOAI_API_KEY` in the environment.
 import Anthropic from '@anthropic-ai/sdk'
 
 const client = new Anthropic({
-  apiKey: process.env.CLOAI_API_KEY,
+  apiKey: process.env.ACODE_API_KEY,
 })
 
 const message = await client.messages.create({

@@ -25,8 +25,17 @@ import {
   isFirstPartyAnthropicBaseUrl,
 } from 'src/utils/model/providers.js'
 import {
+  applyProviderEnvironment,
+  buildStorageForActiveProvider,
   getActiveProviderConfig,
+  getProviderKeyFromConfig,
+  isProviderPoolEnabled,
+  isProviderPoolAvailable,
+  isProviderPoolPaused,
+  type ProviderConfig,
   readCustomApiStorage,
+  updateProviderInStorage,
+  writeCustomApiStorage,
 } from 'src/utils/customApiStorage.js'
 import {
   convertAnthropicRequestToOpenAI,
@@ -38,6 +47,7 @@ import {
   createOpenAICompatStream,
   createOpenAICodexStream,
   createOpenAIResponsesStream,
+  OpenAICompatRequestError,
   refreshOpenAIProviderOAuthIfNeeded,
 } from './openaiCompat.js'
 import {
@@ -507,6 +517,200 @@ export function configureTaskBudgetParams(
   if (!betas.includes(TASK_BUDGETS_BETA_HEADER)) {
     betas.push(TASK_BUDGETS_BETA_HEADER)
   }
+}
+
+const OPENAI_FAILOVER_STATUS_CODES = new Set([
+  401, 403, 408, 409, 425, 429, 500, 502, 503, 504,
+])
+const OPENAI_DEFAULT_COOLDOWN_MS = 60_000
+const OPENAI_RATE_LIMIT_COOLDOWN_MS = 120_000
+const OPENAI_DEFAULT_QUOTA_RESET_MS = 60 * 60 * 1000
+
+type OpenAIPoolCandidate = ProviderConfig & { providerKey: string }
+
+function parseRetryAfterMs(raw: string | undefined): number | undefined {
+  if (!raw) return undefined
+  const trimmed = raw.trim()
+  const seconds = Number(trimmed)
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, Math.round(seconds * 1000))
+  }
+  const parsedDate = Date.parse(trimmed)
+  if (!Number.isFinite(parsedDate)) return undefined
+  return Math.max(0, parsedDate - Date.now())
+}
+
+function parseResetAtMs(headers: Record<string, string>): number | undefined {
+  const candidates = [
+    headers['x-ratelimit-reset'],
+    headers['x-ratelimit-reset-requests'],
+    headers['x-ratelimit-reset-tokens'],
+    headers['openai-ratelimit-reset-requests'],
+    headers['openai-ratelimit-reset-tokens'],
+  ]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    const value = candidate.trim()
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) {
+      return numeric > 1_000_000_000_000 ? numeric : numeric * 1000
+    }
+    const parsedDate = Date.parse(value)
+    if (Number.isFinite(parsedDate)) {
+      return parsedDate
+    }
+  }
+  return undefined
+}
+
+function isQuotaLikeError(error: OpenAICompatRequestError): boolean {
+  return /insufficient_quota|quota|usage_limit_reached|billing/i.test(
+    error.responseText,
+  )
+}
+
+function isOpenAIFailoverError(error: unknown): error is OpenAICompatRequestError {
+  return (
+    error instanceof OpenAICompatRequestError &&
+    OPENAI_FAILOVER_STATUS_CODES.has(error.status)
+  )
+}
+
+function buildOpenAIPoolCandidates(
+  storage: ReturnType<typeof readCustomApiStorage>,
+  activeProviderConfig: ProviderConfig | undefined,
+  model: string,
+): OpenAIPoolCandidate[] {
+  const poolProviders = (storage.providers ?? []).filter(
+    provider =>
+      provider.kind === 'openai-like' &&
+      isProviderPoolEnabled(provider) &&
+      !isProviderPoolPaused(provider),
+  )
+  if (poolProviders.length === 0) return []
+
+  const modelMatched = poolProviders.filter(
+    provider =>
+      provider.models.length === 0 || provider.models.includes(model),
+  )
+  const source = modelMatched.length > 0 ? modelMatched : poolProviders
+  const activeKey =
+    activeProviderConfig !== undefined
+      ? getProviderKeyFromConfig(activeProviderConfig)
+      : undefined
+
+  const preferred = source.filter(provider => isProviderPoolAvailable(provider))
+  const selectable = preferred.length > 0 ? preferred : source
+
+  const ordered: OpenAIPoolCandidate[] = []
+  const seen = new Set<string>()
+  if (activeKey) {
+    const active = selectable.find(
+      provider => getProviderKeyFromConfig(provider) === activeKey,
+    )
+    if (active) {
+      const providerKey = getProviderKeyFromConfig(active)
+      ordered.push({ ...active, providerKey })
+      seen.add(providerKey)
+    }
+  }
+  for (const provider of selectable) {
+    const providerKey = getProviderKeyFromConfig(provider)
+    if (seen.has(providerKey)) continue
+    ordered.push({ ...provider, providerKey })
+    seen.add(providerKey)
+  }
+  return ordered
+}
+
+function markOpenAIProviderFailure(
+  storage: ReturnType<typeof readCustomApiStorage>,
+  providerKey: string,
+  error: OpenAICompatRequestError,
+): ReturnType<typeof readCustomApiStorage> {
+  const now = Date.now()
+  const retryAfterMs = parseRetryAfterMs(error.responseHeaders['retry-after'])
+  const resetAtMs = parseResetAtMs(error.responseHeaders)
+  if (error.status === 429 && isQuotaLikeError(error)) {
+    return updateProviderInStorage(storage, providerKey, provider => ({
+      ...provider,
+      pool: {
+        ...provider.pool,
+        status: 'quota',
+        resetAt: resetAtMs ?? now + OPENAI_DEFAULT_QUOTA_RESET_MS,
+        cooldownUntil: undefined,
+        lastError: `quota:${error.status}`,
+        errorCount: (provider.pool?.errorCount ?? 0) + 1,
+        updatedAt: now,
+      },
+    }))
+  }
+  return updateProviderInStorage(storage, providerKey, provider => ({
+    ...provider,
+    pool: {
+      ...provider.pool,
+      status: 'cooldown',
+      cooldownUntil:
+        now + (retryAfterMs ?? (error.status === 429
+          ? OPENAI_RATE_LIMIT_COOLDOWN_MS
+          : OPENAI_DEFAULT_COOLDOWN_MS)),
+      ...(resetAtMs !== undefined ? { resetAt: resetAtMs } : {}),
+      lastError: `http:${error.status}`,
+      errorCount: (provider.pool?.errorCount ?? 0) + 1,
+      updatedAt: now,
+    },
+  }))
+}
+
+function markOpenAIProviderSuccess(
+  storage: ReturnType<typeof readCustomApiStorage>,
+  providerKey: string,
+): ReturnType<typeof readCustomApiStorage> {
+  const provider = (storage.providers ?? []).find(
+    item => getProviderKeyFromConfig(item) === providerKey,
+  )
+  if (!provider) return storage
+  const shouldReset =
+    provider.pool?.status !== undefined ||
+    provider.pool?.cooldownUntil !== undefined ||
+    provider.pool?.resetAt !== undefined ||
+    provider.pool?.lastError !== undefined ||
+    (provider.pool?.errorCount ?? 0) > 0
+  if (!shouldReset) return storage
+  return updateProviderInStorage(storage, providerKey, item => ({
+    ...item,
+    pool: {
+      ...item.pool,
+      status: 'active',
+      cooldownUntil: undefined,
+      resetAt: undefined,
+      lastError: undefined,
+      errorCount: 0,
+      updatedAt: Date.now(),
+    },
+  }))
+}
+
+function persistOpenAIPoolSelection(
+  previousStorage: ReturnType<typeof readCustomApiStorage>,
+  nextStorage: ReturnType<typeof readCustomApiStorage>,
+  provider: OpenAIPoolCandidate,
+  model: string,
+): ReturnType<typeof readCustomApiStorage> {
+  const switched =
+    previousStorage.activeProviderKey !== provider.providerKey ||
+    previousStorage.activeModel !== model
+  if (!switched && nextStorage === previousStorage) {
+    return nextStorage
+  }
+  const finalStorage = switched
+    ? buildStorageForActiveProvider(nextStorage, provider, model)
+    : nextStorage
+  writeCustomApiStorage(finalStorage)
+  if (switched) {
+    applyProviderEnvironment(provider, model)
+  }
+  return finalStorage
 }
 
 export function getAPIMetadata() {
@@ -1877,99 +2081,188 @@ async function* queryModel(
             activeProviderConfig?.kind === 'openai-like'
               ? activeProviderConfig
               : undefined
-          const openAIAuthMode =
-            activeOpenAIProvider?.authMode ??
-            (activeProviderId === 'openai' ? 'oauth' : 'chat-completions')
-
-          if (openAIAuthMode === 'oauth') {
-            // Refresh OpenAI OAuth token if expired (like Gemini OAuth pattern)
-            await refreshOpenAIProviderOAuthIfNeeded()
-            const openAICodexRequest = convertAnthropicRequestToOpenAICodex({
-              model: params.model,
-              system: params.system,
-              messages: params.messages,
-              tools: params.tools,
-              temperature: params.temperature,
-            })
-            const reader = await createOpenAICodexStream(
-              {
-                apiKey: process.env.CLOAI_API_KEY || '',
-                baseURL: customApiStorage.baseURL,
-                headers: clientRequestId
-                  ? { [CLIENT_REQUEST_ID_HEADER]: clientRequestId }
-                  : undefined,
-                fetch: globalThis.fetch,
-              },
-              openAICodexRequest,
-              signal,
-            )
-            queryCheckpoint('query_response_headers_received')
-            return createAnthropicStreamFromOpenAICodex({
-              reader,
-              model: params.model,
-            }) as unknown as Stream<BetaRawMessageStreamEvent>
-          }
-
-          if (openAIAuthMode === 'responses') {
-            const openAIResponsesRequest = convertAnthropicRequestToOpenAIResponses({
-              model: params.model,
-              system: params.system,
-              messages: messagesForAPI.map(msg => msg.message as MessageParam),
-              tools: params.tools,
-              tool_choice: params.tool_choice,
-              temperature: params.temperature,
-              max_tokens: params.max_tokens,
-            })
-            const reader = await createOpenAIResponsesStream(
-              {
-                apiKey: process.env.CLOAI_API_KEY || '',
-                baseURL: customApiStorage.baseURL,
-                headers: clientRequestId
-                  ? { [CLIENT_REQUEST_ID_HEADER]: clientRequestId }
-                  : undefined,
-                fetch: globalThis.fetch,
-              },
-              openAIResponsesRequest,
-              signal,
-            )
-            queryCheckpoint('query_response_headers_received')
-            return createAnthropicStreamFromOpenAIResponses({
-              reader,
-              model: params.model,
-            }) as unknown as Stream<BetaRawMessageStreamEvent>
-          }
-
-          const openAIRequest = convertAnthropicRequestToOpenAI({
-            model: params.model,
-            system: params.system,
-            messages: params.messages,
-            tools: params.tools,
-            tool_choice: params.tool_choice,
-            temperature: params.temperature,
-            max_tokens: params.max_tokens,
-          })
-          if (!openAIRequest.messages || openAIRequest.messages.length === 0) {
-            throw new Error(
-              `[claude.ts] openai compat request has no messages; source=${options.querySource} model=${params.model}`,
-            )
-          }
-          const reader = await createOpenAICompatStream(
-            {
-              apiKey: process.env.CLOAI_API_KEY || '',
-              baseURL: process.env.ANTHROPIC_BASE_URL || '',
-              headers: clientRequestId
-                ? { [CLIENT_REQUEST_ID_HEADER]: clientRequestId }
-                : undefined,
-              fetch: globalThis.fetch,
-            },
-            openAIRequest,
-            signal,
+          const candidates = buildOpenAIPoolCandidates(
+            customApiStorage,
+            activeOpenAIProvider,
+            params.model,
           )
-          queryCheckpoint('query_response_headers_received')
-          return createAnthropicStreamFromOpenAI({
-            reader,
-            model: params.model,
-          }) as unknown as Stream<BetaRawMessageStreamEvent>
+          if (candidates.length === 0) {
+            throw new Error('No OpenAI-compatible accounts available')
+          }
+
+          let poolStorage = customApiStorage
+          let lastOpenAIError: unknown
+
+          for (let idx = 0; idx < candidates.length; idx++) {
+            const candidate = candidates[idx]!
+            const isLastCandidate = idx === candidates.length - 1
+            let effectiveCandidate: OpenAIPoolCandidate = candidate
+            try {
+              const openAIAuthMode =
+                candidate.authMode ?? 'chat-completions'
+
+              if (openAIAuthMode === 'oauth') {
+                const refreshedProvider = await refreshOpenAIProviderOAuthIfNeeded(
+                  candidate.providerKey,
+                )
+                effectiveCandidate = {
+                  ...refreshedProvider,
+                  providerKey: getProviderKeyFromConfig(refreshedProvider),
+                }
+                const openAICodexRequest = convertAnthropicRequestToOpenAICodex({
+                  model: params.model,
+                  system: params.system,
+                  messages: params.messages,
+                  tools: params.tools,
+                  temperature: params.temperature,
+                })
+                logForDebugging('[claude.ts] creating OpenAI Codex stream', {
+                  level: 'debug',
+                })
+                const reader = await createOpenAICodexStream(
+                  {
+                    apiKey: effectiveCandidate.apiKey ?? '',
+                    baseURL: effectiveCandidate.baseURL,
+                    headers: clientRequestId
+                      ? { [CLIENT_REQUEST_ID_HEADER]: clientRequestId }
+                      : undefined,
+                    fetch: globalThis.fetch,
+                  },
+                  openAICodexRequest,
+                  signal,
+                )
+                const previousPoolStorage = poolStorage
+                poolStorage = markOpenAIProviderSuccess(
+                  poolStorage,
+                  effectiveCandidate.providerKey,
+                )
+                poolStorage = persistOpenAIPoolSelection(
+                  previousPoolStorage,
+                  poolStorage,
+                  effectiveCandidate,
+                  params.model,
+                )
+                logForDebugging('[claude.ts] OpenAI Codex stream ready', {
+                  level: 'debug',
+                })
+                queryCheckpoint('query_response_headers_received')
+                return createAnthropicStreamFromOpenAICodex({
+                  reader,
+                  model: params.model,
+                }) as unknown as Stream<BetaRawMessageStreamEvent>
+              }
+
+              if (openAIAuthMode === 'responses') {
+                const openAIResponsesRequest =
+                  convertAnthropicRequestToOpenAIResponses({
+                    model: params.model,
+                    system: params.system,
+                    messages: messagesForAPI.map(
+                      msg => msg.message as MessageParam,
+                    ),
+                    tools: params.tools,
+                    tool_choice: params.tool_choice,
+                    temperature: params.temperature,
+                    max_tokens: params.max_tokens,
+                  })
+                const reader = await createOpenAIResponsesStream(
+                  {
+                    apiKey: effectiveCandidate.apiKey ?? '',
+                    baseURL: effectiveCandidate.baseURL ?? '',
+                    headers: clientRequestId
+                      ? { [CLIENT_REQUEST_ID_HEADER]: clientRequestId }
+                      : undefined,
+                    fetch: globalThis.fetch,
+                  },
+                  openAIResponsesRequest,
+                  signal,
+                )
+                const previousPoolStorage = poolStorage
+                poolStorage = markOpenAIProviderSuccess(
+                  poolStorage,
+                  effectiveCandidate.providerKey,
+                )
+                poolStorage = persistOpenAIPoolSelection(
+                  previousPoolStorage,
+                  poolStorage,
+                  effectiveCandidate,
+                  params.model,
+                )
+                queryCheckpoint('query_response_headers_received')
+                return createAnthropicStreamFromOpenAIResponses({
+                  reader,
+                  model: params.model,
+                }) as unknown as Stream<BetaRawMessageStreamEvent>
+              }
+
+              const openAIRequest = convertAnthropicRequestToOpenAI({
+                model: params.model,
+                system: params.system,
+                messages: params.messages,
+                tools: params.tools,
+                tool_choice: params.tool_choice,
+                temperature: params.temperature,
+                max_tokens: params.max_tokens,
+              })
+              if (
+                !openAIRequest.messages ||
+                openAIRequest.messages.length === 0
+              ) {
+                throw new Error(
+                  `[claude.ts] openai compat request has no messages; source=${options.querySource} model=${params.model}`,
+                )
+              }
+              const reader = await createOpenAICompatStream(
+                {
+                  apiKey: effectiveCandidate.apiKey ?? '',
+                  baseURL: effectiveCandidate.baseURL ?? '',
+                  headers: clientRequestId
+                    ? { [CLIENT_REQUEST_ID_HEADER]: clientRequestId }
+                    : undefined,
+                  fetch: globalThis.fetch,
+                },
+                openAIRequest,
+                signal,
+              )
+              const previousPoolStorage = poolStorage
+              poolStorage = markOpenAIProviderSuccess(
+                poolStorage,
+                effectiveCandidate.providerKey,
+              )
+              poolStorage = persistOpenAIPoolSelection(
+                previousPoolStorage,
+                poolStorage,
+                effectiveCandidate,
+                params.model,
+              )
+              queryCheckpoint('query_response_headers_received')
+              return createAnthropicStreamFromOpenAI({
+                reader,
+                model: params.model,
+              }) as unknown as Stream<BetaRawMessageStreamEvent>
+            } catch (error) {
+              lastOpenAIError = error
+              if (!isOpenAIFailoverError(error)) {
+                throw error
+              }
+              poolStorage = markOpenAIProviderFailure(
+                poolStorage,
+                effectiveCandidate.providerKey,
+                error,
+              )
+              writeCustomApiStorage(poolStorage)
+              if (!isLastCandidate) {
+                logForDebugging(
+                  `[claude.ts] OpenAI account failover: ${effectiveCandidate.id} -> next (status ${error.status})`,
+                  { level: 'warn' },
+                )
+              }
+            }
+          }
+          if (lastOpenAIError) {
+            throw lastOpenAIError
+          }
+          throw new Error('OpenAI account pool exhausted')
         }
 
         if (compatProvider === 'gemini') {
@@ -3529,7 +3822,7 @@ export async function queryHaiku({
 type QueryWithModelOptions = Omit<Options, 'getToolPermissionContext'>
 
 /**
- * Query a specific model through the Claude Code infrastructure.
+ * Query a specific model through the acode infrastructure.
  * This goes through the full query pipeline including proper authentication,
  * betas, and headers - unlike direct API calls.
  */

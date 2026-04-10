@@ -36,7 +36,7 @@ const INITIAL_STATE: State = {
   currentWorkflowInstallStep: 0,
   warnings: [],
   secretExists: false,
-  secretName: 'CLOAI_API_KEY',
+  secretName: 'ACODE_API_KEY',
   useExistingSecret: true,
   workflowExists: false,
   selectedWorkflows: ['claude', 'claude-review'] as Workflow[],
@@ -220,7 +220,7 @@ function InstallGitHubApp(props: {
     if (checkSecretsResult.code === 0) {
       const lines = checkSecretsResult.stdout.split('\n');
       const hasAnthropicKey = lines.some((line: string) => {
-        return /^CLOAI_API_KEY\s+/.test(line);
+        return /^ACODE_API_KEY\s+/.test(line);
       });
       if (hasAnthropicKey) {
         setState(prev_6 => ({
@@ -395,12 +395,12 @@ function InstallGitHubApp(props: {
         useExistingKey: state.selectedApiKeyOption === 'existing'
       }));
 
-      // Check if CLOAI_API_KEY secret already exists
+      // Check if ACODE_API_KEY secret already exists
       const checkSecretsResult_0 = await execFileNoThrow('gh', ['secret', 'list', '--app', 'actions', '--repo', state.selectedRepoName]);
       if (checkSecretsResult_0.code === 0) {
         const lines_0 = checkSecretsResult_0.stdout.split('\n');
         const hasAnthropicKey_0 = lines_0.some((line_0: string) => {
-          return /^CLOAI_API_KEY\s+/.test(line_0);
+          return /^ACODE_API_KEY\s+/.test(line_0);
         });
         if (hasAnthropicKey_0) {
           logEvent('tengu_install_github_app_step_completed', {
@@ -497,7 +497,7 @@ function InstallGitHubApp(props: {
     setState(prev_28 => ({
       ...prev_28,
       useExistingSecret,
-      secretName: useExistingSecret ? 'CLOAI_API_KEY' : ''
+      secretName: useExistingSecret ? 'ACODE_API_KEY' : ''
     }));
   };
   const handleWorkflowAction = async (action: 'update' | 'skip' | 'exit') => {

@@ -120,7 +120,7 @@ export async function update() {
     writeToStdout('\n')
 
     if (packageManager === 'homebrew') {
-      writeToStdout('Cloai is managed by Homebrew.\n')
+      writeToStdout('acode is managed by Homebrew.\n')
       const latest = await getLatestVersion(channel)
       if (latest && !gte(MACRO.VERSION, latest)) {
         writeToStdout(`Update available: ${MACRO.VERSION} → ${latest}\n`)
@@ -128,10 +128,10 @@ export async function update() {
         writeToStdout('To update, run:\n')
         writeToStdout(chalk.bold('  brew upgrade claude-code') + '\n')
       } else {
-        writeToStdout('Cloai is up to date!\n')
+        writeToStdout('acode is up to date!\n')
       }
     } else if (packageManager === 'winget') {
-      writeToStdout('Cloai is managed by winget.\n')
+      writeToStdout('acode is managed by winget.\n')
       const latest = await getLatestVersion(channel)
       if (latest && !gte(MACRO.VERSION, latest)) {
         writeToStdout(`Update available: ${MACRO.VERSION} → ${latest}\n`)
@@ -141,10 +141,10 @@ export async function update() {
           chalk.bold('  winget upgrade Anthropic.ClaudeCode') + '\n',
         )
       } else {
-        writeToStdout('Cloai is up to date!\n')
+        writeToStdout('acode is up to date!\n')
       }
     } else if (packageManager === 'apk') {
-      writeToStdout('Cloai is managed by apk.\n')
+      writeToStdout('acode is managed by apk.\n')
       const latest = await getLatestVersion(channel)
       if (latest && !gte(MACRO.VERSION, latest)) {
         writeToStdout(`Update available: ${MACRO.VERSION} → ${latest}\n`)
@@ -152,13 +152,13 @@ export async function update() {
         writeToStdout('To update, run:\n')
         writeToStdout(chalk.bold('  apk upgrade claude-code') + '\n')
       } else {
-        writeToStdout('Cloai is up to date!\n')
+        writeToStdout('acode is up to date!\n')
       }
     } else {
       // pacman, deb, and rpm don't get specific commands because they each have
       // multiple frontends (pacman: yay/paru/makepkg, deb: apt/apt-get/aptitude/nala,
       // rpm: dnf/yum/zypper)
-      writeToStdout('Cloai is managed by a package manager.\n')
+      writeToStdout('acode is managed by a package manager.\n')
       writeToStdout('Please use your package manager to update.\n')
     }
 
@@ -225,7 +225,7 @@ export async function update() {
           : ''
         writeToStdout(
           chalk.yellow(
-            `Another Cloai process${pidInfo} is currently running. Please try again in a moment.`,
+            `Another acode process${pidInfo} is currently running. Please try again in a moment.`,
           ) + '\n',
         )
         await gracefulShutdown(0)
@@ -238,7 +238,7 @@ export async function update() {
 
       if (result.latestVersion === MACRO.VERSION) {
         writeToStdout(
-          chalk.green(`Cloai Code is up to date (${MACRO.VERSION})`) + '\n',
+          chalk.green(`acode is up to date (${MACRO.VERSION})`) + '\n',
         )
       } else {
         writeToStdout(
@@ -252,7 +252,7 @@ export async function update() {
     } catch (error) {
       process.stderr.write('Error: Failed to install native update\n')
       process.stderr.write(String(error) + '\n')
-      process.stderr.write('Try running "cloai doctor" for diagnostics\n')
+      process.stderr.write('Try running "acode doctor" for diagnostics\n')
       await gracefulShutdown(1)
     }
   }
@@ -308,7 +308,7 @@ export async function update() {
   // Check if versions match exactly, including any build metadata (like SHA)
   if (latestVersion === MACRO.VERSION) {
     writeToStdout(
-      chalk.green(`Cloai Code is up to date (${MACRO.VERSION})`) + '\n',
+      chalk.green(`acode is up to date (${MACRO.VERSION})`) + '\n',
     )
     await gracefulShutdown(0)
   }
@@ -391,7 +391,7 @@ export async function update() {
       } else {
         process.stderr.write('Try running with sudo or fix npm permissions\n')
         process.stderr.write(
-          'Or consider using native installation with: cloai install\n',
+          'Or consider using native installation with: acode install\n',
         )
       }
       await gracefulShutdown(1)
@@ -405,7 +405,7 @@ export async function update() {
         )
       } else {
         process.stderr.write(
-          'Or consider using native installation with: cloai install\n',
+          'Or consider using native installation with: acode install\n',
         )
       }
       await gracefulShutdown(1)

@@ -302,7 +302,7 @@ export function Config({
         }
       }));
       if (nextValue) {
-        process.env.CLOAI_API_KEY = nextValue;
+        process.env.ACODE_API_KEY = nextValue;
       }
       setCustomApiKey(nextValue);
       setGlobalConfig(getGlobalConfig());
@@ -1055,16 +1055,16 @@ export function Config({
     onChange() {
       // Will be handled by toggleSetting function
     }
-  }] : []), ...(process.env.CLOAI_API_KEY && !isRunningOnHomespace() ? [{
+  }] : []), ...(process.env.ACODE_API_KEY && !isRunningOnHomespace() ? [{
     id: 'apiKey',
     label: <Text>
                 Use custom API key:{' '}
                 <Text bold>
-                  {normalizeApiKeyForConfig(process.env.CLOAI_API_KEY)}
+                  {normalizeApiKeyForConfig(process.env.ACODE_API_KEY)}
                 </Text>
               </Text>,
     searchText: 'Use custom API key',
-    value: Boolean(process.env.CLOAI_API_KEY && globalConfig.customApiKeyResponses?.approved?.includes(normalizeApiKeyForConfig(process.env.CLOAI_API_KEY))),
+    value: Boolean(process.env.ACODE_API_KEY && globalConfig.customApiKeyResponses?.approved?.includes(normalizeApiKeyForConfig(process.env.ACODE_API_KEY))),
     type: 'boolean' as const,
     onChange(useCustomKey: boolean) {
       saveGlobalConfig(current_22 => {
@@ -1089,8 +1089,8 @@ export function Config({
             rejected: []
           };
         }
-        if (process.env.CLOAI_API_KEY) {
-          const truncatedKey = normalizeApiKeyForConfig(process.env.CLOAI_API_KEY);
+        if (process.env.ACODE_API_KEY) {
+          const truncatedKey = normalizeApiKeyForConfig(process.env.ACODE_API_KEY);
           if (useCustomKey) {
             updated.customApiKeyResponses = {
               ...updated.customApiKeyResponses,
@@ -1167,15 +1167,15 @@ export function Config({
       return `Set ${key} to ${chalk.bold(value_2)}`;
     });
     // Check for API key changes
-    // On homespace, CLOAI_API_KEY is preserved in process.env for child
-    // processes but ignored by Claude Code itself (see auth.ts).
-    const effectiveApiKey = isRunningOnHomespace() ? undefined : process.env.CLOAI_API_KEY;
+    // On homespace, ACODE_API_KEY is preserved in process.env for child
+    // processes but ignored by acode itself (see auth.ts).
+    const effectiveApiKey = isRunningOnHomespace() ? undefined : process.env.ACODE_API_KEY;
     const initialUsingCustomKey = Boolean(effectiveApiKey && initialConfig.current.customApiKeyResponses?.approved?.includes(normalizeApiKeyForConfig(effectiveApiKey)));
     const currentUsingCustomKey = Boolean(effectiveApiKey && globalConfig.customApiKeyResponses?.approved?.includes(normalizeApiKeyForConfig(effectiveApiKey)));
     if (initialUsingCustomKey !== currentUsingCustomKey) {
       formattedChanges.push(`${currentUsingCustomKey ? 'Enabled' : 'Disabled'} custom API key`);
       logEvent('tengu_config_changed', {
-        key: 'env.CLOAI_API_KEY' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        key: 'env.ACODE_API_KEY' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         value: currentUsingCustomKey as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
       });
     }

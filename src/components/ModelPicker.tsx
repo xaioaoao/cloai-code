@@ -222,7 +222,7 @@ export function ModelPicker({
     <Box flexDirection="column">
       <Box marginBottom={1} flexDirection="column">
         <Text color="remember" bold={true}>Select model</Text>
-        <Text dimColor={true}>{headerText ?? 'Switch between models. Applies to this session and future Claude Code sessions. For other/previous model names, specify with --model.'}</Text>
+        <Text dimColor={true}>{headerText ?? 'Switch between models. Applies to this session and future acode sessions. For other/previous model names, specify with --model.'}</Text>
         {sessionModel && (
           <Text dimColor={true}>
             Currently using {modelDisplayString(sessionModel)} for this session (set by plan mode). Selecting a model will undo this.

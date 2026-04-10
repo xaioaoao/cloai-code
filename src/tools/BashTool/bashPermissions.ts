@@ -399,7 +399,7 @@ const SAFE_ENV_VARS = new Set([
   'PYTEST_DEBUG', // debug output
 
   // API keys and authentication
-  'CLOAI_API_KEY', // API authentication
+  'ACODE_API_KEY', // API authentication
 
   // Locale and character encoding
   'LANG', // default locale

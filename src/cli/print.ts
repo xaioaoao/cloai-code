@@ -678,6 +678,7 @@ export async function runHeadless(
   }
 
   headlessProfilerCheckpoint('before_loadInitialMessages')
+  logForDebugging('[print] before loadInitialMessages')
   const appState = getAppState()
   const {
     messages: initialMessages,
@@ -835,11 +836,13 @@ export async function runHeadless(
   registerProcessOutputErrorHandlers()
 
   headlessProfilerCheckpoint('after_loadInitialMessages')
+  logForDebugging('[print] after loadInitialMessages')
 
   // Ensure model strings are initialized before generating model options.
   // For Bedrock users, this waits for the profile fetch to get correct region strings.
   await ensureModelStringsInitialized()
   headlessProfilerCheckpoint('after_modelStrings')
+  logForDebugging('[print] after ensureModelStringsInitialized')
 
   // UDS inbox store registration is deferred until after `run` is defined
   // so we can pass `run` as the onEnqueue callback (see below).
@@ -861,6 +864,7 @@ export async function runHeadless(
       : null
 
   headlessProfilerCheckpoint('before_runHeadlessStreaming')
+  logForDebugging('[print] before runHeadlessStreaming')
   for await (const message of runHeadlessStreaming(
     structuredIO,
     appState.mcp.clients,
@@ -1873,10 +1877,12 @@ function runHeadlessStreaming(
     idleTimeout.stop()
 
     headlessProfilerCheckpoint('run_entry')
+    logForDebugging('[print] run loop entered')
     // TODO(custom-tool-refactor): Should move to the init message, like browser
 
     await updateSdkMcp()
     headlessProfilerCheckpoint('after_updateSdkMcp')
+    logForDebugging('[print] after updateSdkMcp')
 
     // Resolve deferred plugin installation (CLAUDE_CODE_SYNC_PLUGIN_INSTALL).
     // The promise was started eagerly so installation overlaps with other init.
@@ -2136,6 +2142,7 @@ function runHeadlessStreaming(
             : undefined
 
           headlessProfilerCheckpoint('before_ask')
+          logForDebugging('[print] before ask')
           startQueryProfile()
           // Per-iteration ALS context so bg agents spawned inside ask()
           // inherit workload across their detached awaits. In-process cron
@@ -2244,6 +2251,7 @@ function runHeadlessStreaming(
               }
             }
           }) // end runWithWorkload
+          logForDebugging('[print] after ask')
 
           for (const uuid of batchUuids) {
             notifyCommandLifecycle(uuid, 'completed')
@@ -5036,7 +5044,7 @@ async function loadInitialMessages(
       )
       if (!parsedSessionId) {
         let errorMessage =
-          'Error: --resume requires a valid session ID when used with --print. Usage: cloai -p --resume <session-id>'
+          'Error: --resume requires a valid session ID when used with --print. Usage: acode -p --resume <session-id>'
         if (typeof options.resume === 'string') {
           errorMessage += `. Session IDs must be in UUID format (e.g., 550e8400-e29b-41d4-a716-446655440000). Provided value "${options.resume}" is not a valid UUID`
         }

@@ -29,7 +29,7 @@ export async function performLogout({
   secureStorage.delete();
   clearCustomApiStorage();
   delete process.env.ANTHROPIC_BASE_URL;
-  delete process.env.CLOAI_API_KEY;
+  delete process.env.ACODE_API_KEY;
   delete process.env.ANTHROPIC_MODEL;
   await clearAuthRelatedCaches();
   saveGlobalConfig(current => {

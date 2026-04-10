@@ -88,6 +88,10 @@ export function buildAuthUrl({
     authUrl.searchParams.append('id_token_add_organizations', 'true')
     authUrl.searchParams.append('codex_cli_simplified_flow', 'true')
     authUrl.searchParams.append('originator', OPENAI_ORIGINATOR)
+    // Force account selection/login each time to avoid silently reusing
+    // the currently signed-in browser account when user intends to add
+    // another OpenAI account.
+    authUrl.searchParams.append('prompt', 'login')
     return authUrl.toString()
   }
 

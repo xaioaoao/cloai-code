@@ -14,7 +14,7 @@ http = Net::HTTP.new(uri.host, uri.port)
 http.use_ssl = true
 
 request = Net::HTTP::Post.new(uri)
-request['x-api-key'] = ENV.fetch('CLOAI_API_KEY')
+request['x-api-key'] = ENV.fetch('ACODE_API_KEY')
 request['anthropic-version'] = '2023-06-01'
 request['content-type'] = 'application/json'
 request.body = JSON.generate(

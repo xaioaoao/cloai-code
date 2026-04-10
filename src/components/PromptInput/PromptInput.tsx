@@ -371,6 +371,7 @@ function PromptInput({
   // printable, inputFilter prepends a space before it. Any other input
   // (arrow, escape, backspace, paste, space) disarms without inserting.
   const pendingSpaceAfterPillRef = useRef(false);
+  const pendingImagePasteIdsRef = useRef(new Set<number>());
   const [showTeamsDialog, setShowTeamsDialog] = useState(false);
   const [showBridgeDialog, setShowBridgeDialog] = useState(false);
   const [teammateFooterIndex, setTeammateFooterIndex] = useState(0);
@@ -761,7 +762,7 @@ function PromptInput({
     if (feature('ULTRAPLAN') && ultraplanTriggers.length) {
       addNotification({
         key: 'ultraplan-active',
-        text: 'This prompt will launch an ultraplan session in Claude Code on the web',
+        text: 'This prompt will launch an ultraplan session in acode on the web',
         priority: 'immediate',
         timeoutMs: 5000
       });
@@ -1152,6 +1153,7 @@ function PromptInput({
     logEvent('tengu_paste_image', {});
     onModeChange('prompt');
     const pasteId = nextPasteIdRef.current++;
+    pendingImagePasteIdsRef.current.add(pasteId);
     const newContent: PastedContent = {
       id: pasteId,
       type: 'image',
@@ -1180,6 +1182,9 @@ function PromptInput({
     const prefix = pendingSpaceAfterPillRef.current ? ' ' : '';
     insertTextAtCursor(prefix + formatImageRef(pasteId));
     pendingSpaceAfterPillRef.current = true;
+    setTimeout(() => {
+      pendingImagePasteIdsRef.current.delete(pasteId);
+    }, 1000);
   }
 
   // Prune images whose [Image #N] placeholder is no longer in the input text.
@@ -1189,7 +1194,7 @@ function PromptInput({
   useEffect(() => {
     const referencedIds = new Set(parseReferences(input).map(r => r.id));
     setPastedContents(prev => {
-      const orphaned = Object.values(prev).filter(c => c.type === 'image' && !referencedIds.has(c.id));
+      const orphaned = Object.values(prev).filter(c => c.type === 'image' && !referencedIds.has(c.id) && !pendingImagePasteIdsRef.current.has(c.id));
       if (orphaned.length === 0) return prev;
       const next = {
         ...prev

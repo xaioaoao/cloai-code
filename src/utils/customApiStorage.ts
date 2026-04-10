@@ -40,6 +40,19 @@ export type ProviderReasoningConfig = {
   textVerbosity?: string | null
 }
 
+export type ProviderPoolStatus = 'active' | 'cooldown' | 'quota' | 'error'
+
+export type ProviderPoolRuntime = {
+  enabled?: boolean
+  paused?: boolean
+  status?: ProviderPoolStatus
+  cooldownUntil?: number
+  resetAt?: number
+  lastError?: string
+  errorCount?: number
+  updatedAt?: number
+}
+
 export type ProviderConfig = {
   id: string
   kind: CompatibleProviderKind
@@ -49,6 +62,7 @@ export type ProviderConfig = {
   models: string[]
   reasoning?: ProviderReasoningConfig
   oauth?: GeminiOAuthConfig | OpenAIOAuthConfig
+  pool?: ProviderPoolRuntime
 }
 
 export type CustomApiStorageData = {
@@ -174,6 +188,53 @@ function normalizeProviderReasoning(value: unknown): ProviderReasoningConfig | u
   }
 }
 
+function normalizeProviderPoolRuntime(
+  value: unknown,
+): ProviderPoolRuntime | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const enabled = typeof record.enabled === 'boolean' ? record.enabled : undefined
+  const paused = typeof record.paused === 'boolean' ? record.paused : undefined
+  const status =
+    record.status === 'active' ||
+    record.status === 'cooldown' ||
+    record.status === 'quota' ||
+    record.status === 'error'
+      ? record.status
+      : undefined
+  const cooldownUntil =
+    typeof record.cooldownUntil === 'number' ? record.cooldownUntil : undefined
+  const resetAt = typeof record.resetAt === 'number' ? record.resetAt : undefined
+  const lastError =
+    typeof record.lastError === 'string' ? record.lastError : undefined
+  const errorCount =
+    typeof record.errorCount === 'number' ? record.errorCount : undefined
+  const updatedAt =
+    typeof record.updatedAt === 'number' ? record.updatedAt : undefined
+  if (
+    enabled === undefined &&
+    paused === undefined &&
+    status === undefined &&
+    cooldownUntil === undefined &&
+    resetAt === undefined &&
+    lastError === undefined &&
+    errorCount === undefined &&
+    updatedAt === undefined
+  ) {
+    return undefined
+  }
+  return {
+    ...(enabled !== undefined ? { enabled } : {}),
+    ...(paused !== undefined ? { paused } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(cooldownUntil !== undefined ? { cooldownUntil } : {}),
+    ...(resetAt !== undefined ? { resetAt } : {}),
+    ...(lastError !== undefined ? { lastError } : {}),
+    ...(errorCount !== undefined ? { errorCount } : {}),
+    ...(updatedAt !== undefined ? { updatedAt } : {}),
+  }
+}
+
 function normalizeGeminiOAuth(value: unknown): GeminiOAuthConfig | undefined {
   if (!value || typeof value !== 'object') return undefined
   const record = value as Record<string, unknown>
@@ -290,6 +351,7 @@ function normalizeProviderConfig(value: Record<string, unknown>): ProviderConfig
         : kind === 'gemini-like'
           ? normalizeGeminiOAuth(value.oauth)
           : undefined,
+    pool: normalizeProviderPoolRuntime(value.pool),
   }
 }
 
@@ -408,6 +470,114 @@ export function getActiveProviderConfig(
       provider.id === activeProviderId &&
       (activeKind === undefined || provider.kind === activeKind),
   ) ?? providers[0]
+}
+
+export function findProviderByKey(
+  storage: CustomApiStorageData,
+  providerKey: string,
+): ProviderConfig | undefined {
+  return (storage.providers ?? []).find(
+    provider => getProviderKeyFromConfig(provider) === providerKey,
+  )
+}
+
+export function updateProviderInStorage(
+  storage: CustomApiStorageData,
+  providerKey: string,
+  updater: (provider: ProviderConfig) => ProviderConfig,
+): CustomApiStorageData {
+  const providers = storage.providers ?? []
+  const nextProviders = providers.map(provider =>
+    getProviderKeyFromConfig(provider) === providerKey
+      ? updater(provider)
+      : provider,
+  )
+  return {
+    ...storage,
+    providers: nextProviders,
+  }
+}
+
+export function buildStorageForActiveProvider(
+  storage: CustomApiStorageData,
+  provider: ProviderConfig | undefined,
+  activeModel: string | undefined,
+): CustomApiStorageData {
+  return {
+    ...storage,
+    activeProviderKey:
+      provider !== undefined ? getProviderKeyFromConfig(provider) : undefined,
+    activeProvider: provider?.id,
+    activeAuthMode: provider?.authMode,
+    activeModel,
+    ...buildProviderSummary(provider, activeModel),
+  }
+}
+
+export function applyProviderEnvironment(
+  provider: ProviderConfig | undefined,
+  model: string | undefined,
+): void {
+  if (
+    provider?.kind === 'gemini-like' &&
+    provider.authMode === 'gemini-cli-oauth'
+  ) {
+    delete process.env.ANTHROPIC_BASE_URL
+    delete process.env.ACODE_API_KEY
+  } else {
+    if (provider?.baseURL) {
+      process.env.ANTHROPIC_BASE_URL = provider.baseURL
+    } else {
+      delete process.env.ANTHROPIC_BASE_URL
+    }
+    if (provider?.apiKey) {
+      process.env.ACODE_API_KEY = provider.apiKey
+    } else {
+      delete process.env.ACODE_API_KEY
+    }
+  }
+  if (model) {
+    process.env.ANTHROPIC_MODEL = model
+  } else {
+    delete process.env.ANTHROPIC_MODEL
+  }
+}
+
+export function isProviderPoolEnabled(provider: ProviderConfig): boolean {
+  return provider.pool?.enabled !== false
+}
+
+export function isProviderPoolPaused(provider: ProviderConfig): boolean {
+  return provider.pool?.paused === true
+}
+
+export function isProviderInCooldown(
+  provider: ProviderConfig,
+  nowMs: number = Date.now(),
+): boolean {
+  const cooldownUntil = provider.pool?.cooldownUntil
+  return typeof cooldownUntil === 'number' && cooldownUntil > nowMs
+}
+
+export function isProviderQuotaBlocked(
+  provider: ProviderConfig,
+  nowMs: number = Date.now(),
+): boolean {
+  if (provider.pool?.status !== 'quota') return false
+  const resetAt = provider.pool?.resetAt
+  return typeof resetAt === 'number' && resetAt > nowMs
+}
+
+export function isProviderPoolAvailable(
+  provider: ProviderConfig,
+  nowMs: number = Date.now(),
+): boolean {
+  return (
+    isProviderPoolEnabled(provider) &&
+    !isProviderPoolPaused(provider) &&
+    !isProviderInCooldown(provider, nowMs) &&
+    !isProviderQuotaBlocked(provider, nowMs)
+  )
 }
 
 export function writeCustomApiStorage(next: CustomApiStorageData): void {

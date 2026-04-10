@@ -15,6 +15,7 @@ import { getFsImplementation } from './fsOperations.js'
 import {
   detectImageFormatFromBase64,
   type ImageDimensions,
+  type ResizeResult,
   maybeResizeAndDownsampleImageBuffer,
 } from './imageResizer.js'
 import { logError } from './log.js'
@@ -90,6 +91,117 @@ export type ImageWithDimensions = {
   dimensions?: ImageDimensions
 }
 
+async function getSipsDimensions(
+  imagePath: string,
+): Promise<Pick<ImageDimensions, 'displayWidth' | 'displayHeight'>> {
+  const result = await execa('/usr/bin/sips', [
+    '-g',
+    'pixelWidth',
+    '-g',
+    'pixelHeight',
+    imagePath,
+  ])
+  const width = result.stdout.match(/pixelWidth:\s*(\d+)/)?.[1]
+  const height = result.stdout.match(/pixelHeight:\s*(\d+)/)?.[1]
+  return {
+    displayWidth: width ? Number(width) : undefined,
+    displayHeight: height ? Number(height) : undefined,
+  }
+}
+
+async function resizeImageFileWithSips(
+  imagePath: string,
+): Promise<ResizeResult | null> {
+  if (process.platform !== 'darwin') {
+    return null
+  }
+
+  const tempDir = process.env.CLAUDE_CODE_TMPDIR || '/tmp'
+  const tempId = randomBytes(6).toString('hex')
+  const pngOutputPath = join(tempDir, `acode_clipboard_resized_${tempId}.png`)
+  const jpegOutputPath = join(tempDir, `acode_clipboard_resized_${tempId}.jpg`)
+  const originalDimensions = await getSipsDimensions(imagePath)
+
+  try {
+    const pngResult = await execa(
+      '/usr/bin/sips',
+      [
+        '-s',
+        'format',
+        'png',
+        '-Z',
+        String(Math.min(IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT)),
+        imagePath,
+        '--out',
+        pngOutputPath,
+      ],
+      { reject: false },
+    )
+
+    if (pngResult.exitCode !== 0) {
+      return null
+    }
+
+    const pngBuffer = getFsImplementation().readFileBytesSync(pngOutputPath)
+    if (pngBuffer.length > 0 && pngBuffer.length <= IMAGE_TARGET_RAW_SIZE) {
+      const displayDimensions = await getSipsDimensions(pngOutputPath)
+      return {
+        buffer: pngBuffer,
+        mediaType: 'png',
+        dimensions: {
+          originalWidth: originalDimensions.displayWidth,
+          originalHeight: originalDimensions.displayHeight,
+          displayWidth: displayDimensions.displayWidth,
+          displayHeight: displayDimensions.displayHeight,
+        },
+      }
+    }
+
+    for (const quality of [80, 60, 40, 20]) {
+      const jpegResult = await execa(
+        '/usr/bin/sips',
+        [
+          '-s',
+          'format',
+          'jpeg',
+          '-s',
+          'formatOptions',
+          String(quality),
+          '-Z',
+          String(Math.min(IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT)),
+          imagePath,
+          '--out',
+          jpegOutputPath,
+        ],
+        { reject: false },
+      )
+
+      if (jpegResult.exitCode !== 0) {
+        continue
+      }
+
+      const jpegBuffer = getFsImplementation().readFileBytesSync(jpegOutputPath)
+      if (jpegBuffer.length > 0 && jpegBuffer.length <= IMAGE_TARGET_RAW_SIZE) {
+        const displayDimensions = await getSipsDimensions(jpegOutputPath)
+        return {
+          buffer: jpegBuffer,
+          mediaType: 'jpeg',
+          dimensions: {
+            originalWidth: originalDimensions.displayWidth,
+            originalHeight: originalDimensions.displayHeight,
+            displayWidth: displayDimensions.displayWidth,
+            displayHeight: displayDimensions.displayHeight,
+          },
+        }
+      }
+    }
+
+    return null
+  } finally {
+    void execa('rm', ['-f', pngOutputPath, jpegOutputPath], { reject: false })
+  }
+}
+
 /**
  * Check if clipboard contains an image without retrieving it.
  */
@@ -125,9 +237,8 @@ export async function getImageFromClipboard(): Promise<ImageWithDimensions | nul
   // Fast path: native NSPasteboard reader (macOS only). Reads PNG bytes
   // directly in-process and downsamples via CoreGraphics if over the
   // dimension cap. ~5ms cold, sub-ms warm — vs. ~1.5s for the osascript
-  // path below. Throws if the native module is unavailable, in which case
-  // the catch block falls through to osascript. A `null` return from the
-  // native call is authoritative (clipboard has no image).
+  // path below. If the native reader misses an image type, fall through to
+  // osascript because macOS pasteboard often carries multiple image flavors.
   if (
     feature('NATIVE_CLIPBOARD_IMAGE') &&
     process.platform === 'darwin' &&
@@ -140,42 +251,41 @@ export async function getImageFromClipboard(): Promise<ImageWithDimensions | nul
         throw new Error('native clipboard reader unavailable')
       }
       const native = readClipboard(IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT)
-      if (!native) {
-        return null
-      }
-      // The native path caps dimensions but not file size. A complex
-      // 2000×2000 PNG can still exceed the 3.75MB raw / 5MB base64 API
-      // limit — for that edge case, run through the same size-cap that
-      // the osascript path uses (degrades to JPEG if needed). Cheap if
-      // already under: just a sharp metadata read.
-      const buffer: Buffer = native.png
-      if (buffer.length > IMAGE_TARGET_RAW_SIZE) {
-        const resized = await maybeResizeAndDownsampleImageBuffer(
-          buffer,
-          buffer.length,
-          'png',
-        )
+      if (native) {
+        // The native path caps dimensions but not file size. A complex
+        // 2000×2000 PNG can still exceed the 3.75MB raw / 5MB base64 API
+        // limit — for that edge case, run through the same size-cap that
+        // the osascript path uses (degrades to JPEG if needed). Cheap if
+        // already under: just a sharp metadata read.
+        const buffer: Buffer = native.png
+        if (buffer.length > IMAGE_TARGET_RAW_SIZE) {
+          const resized = await maybeResizeAndDownsampleImageBuffer(
+            buffer,
+            buffer.length,
+            'png',
+          )
+          return {
+            base64: resized.buffer.toString('base64'),
+            mediaType: `image/${resized.mediaType}`,
+            // resized.dimensions sees the already-downsampled buffer; native knows the true originals.
+            dimensions: {
+              originalWidth: native.originalWidth,
+              originalHeight: native.originalHeight,
+              displayWidth: resized.dimensions?.displayWidth ?? native.width,
+              displayHeight: resized.dimensions?.displayHeight ?? native.height,
+            },
+          }
+        }
         return {
-          base64: resized.buffer.toString('base64'),
-          mediaType: `image/${resized.mediaType}`,
-          // resized.dimensions sees the already-downsampled buffer; native knows the true originals.
+          base64: buffer.toString('base64'),
+          mediaType: 'image/png',
           dimensions: {
             originalWidth: native.originalWidth,
             originalHeight: native.originalHeight,
-            displayWidth: resized.dimensions?.displayWidth ?? native.width,
-            displayHeight: resized.dimensions?.displayHeight ?? native.height,
+            displayWidth: native.width,
+            displayHeight: native.height,
           },
         }
-      }
-      return {
-        base64: buffer.toString('base64'),
-        mediaType: 'image/png',
-        dimensions: {
-          originalWidth: native.originalWidth,
-          originalHeight: native.originalHeight,
-          displayWidth: native.width,
-          displayHeight: native.height,
-        },
       }
     } catch (e) {
       logError(e as Error)
@@ -218,11 +328,20 @@ export async function getImageFromClipboard(): Promise<ImageWithDimensions | nul
     }
 
     // Resize if needed to stay under 5MB API limit
-    const resized = await maybeResizeAndDownsampleImageBuffer(
-      imageBuffer,
-      imageBuffer.length,
-      'png',
-    )
+    let resized: ResizeResult
+    try {
+      resized = await maybeResizeAndDownsampleImageBuffer(
+        imageBuffer,
+        imageBuffer.length,
+        'png',
+      )
+    } catch (e) {
+      const sipsResized = await resizeImageFileWithSips(screenshotPath)
+      if (!sipsResized) {
+        throw e
+      }
+      resized = sipsResized
+    }
     const base64Image = resized.buffer.toString('base64')
 
     // Detect format from magic bytes

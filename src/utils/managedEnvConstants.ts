@@ -28,7 +28,7 @@ const PROVIDER_MANAGED_ENV_VARS = new Set([
   // Region routing (per-model VERTEX_REGION_CLAUDE_* handled by prefix below)
   'CLOUD_ML_REGION',
   // Auth
-  'CLOAI_API_KEY',
+  'ACODE_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_CODE_OAUTH_TOKEN',
   'AWS_BEARER_TOKEN_BEDROCK',
@@ -83,7 +83,7 @@ export const DANGEROUS_SHELL_SETTINGS = [
 
 /**
  * Safe environment variables that can be applied before trust dialog.
- * These are Claude Code specific settings that don't pose security risks.
+ * These are acode specific settings that don't pose security risks.
  *
  * IMPORTANT: This is the source of truth for which env vars are safe.
  * Any env var NOT in this list is considered dangerous and will trigger
@@ -102,7 +102,7 @@ export const DANGEROUS_SHELL_SETTINGS = [
  *
  * === SWITCH TO ATTACKER-CONTROLLED PROJECT ===
  * - ANTHROPIC_FOUNDRY_RESOURCE
- * - CLOAI_API_KEY, ANTHROPIC_AUTH_TOKEN
+ * - ACODE_API_KEY, ANTHROPIC_AUTH_TOKEN
  * - AWS_BEARER_TOKEN_BEDROCK
  */
 export const SAFE_ENV_VARS = new Set([

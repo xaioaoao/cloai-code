@@ -154,7 +154,7 @@ export const call: LocalCommandCall = async (_args, _context) => {
   }))
 
   // Apply to current process
-  process.env.CLOAI_API_KEY = accessToken
+  process.env.ACODE_API_KEY = accessToken
   process.env.ANTHROPIC_MODEL = defaultModel ?? ''
 
   const expiryInfo = expiresAt

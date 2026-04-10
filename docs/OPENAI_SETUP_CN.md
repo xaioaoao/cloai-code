@@ -1,40 +1,40 @@
-# cloai OpenAI 接入与隔离部署指南
+# acode OpenAI 接入与隔离部署指南
 
-本文档面向想把 `cloai` 作为独立 OpenAI CLI 使用的人。
+本文档面向想把 `acode` 作为独立 OpenAI CLI 使用的人。
 
 目标：
 
 - 默认走 `OpenAI / gpt-5.4`
 - 不复用原版 `claude` 的 AWS Bedrock 配置
-- 配置目录独立到 `~/.cloai`
+- 配置目录独立到 `~/.acode`
 - 兼容公司代理场景
-- 避免终端优先命中 `~/.bun/bin/cloai` 导致旧入口失效
+- 避免终端优先命中 `~/.bun/bin/acode` 导致旧入口失效
 
 ## 适用前提
 
 - `bun >= 1.3.5`
 - `node >= 24`
 - macOS / Linux shell 环境
-- 已能使用 `codex login`，或准备在 `cloai` 内单独做 OpenAI 登录
+- 已能使用 `codex login`，或准备在 `acode` 内单独做 OpenAI 登录
 
 ## 一次性安装
 
 ```bash
 git clone <your-repo-url>
-cd cloai-code
+cd acode
 bun install
 bun link
-mkdir -p ~/.local/bin ~/.cloai
+mkdir -p ~/.local/bin ~/.acode
 ```
 
 ## 独立启动脚本
 
-创建 `~/.local/bin/cloai`：
+创建 `~/.local/bin/acode`：
 
 ```zsh
 #!/bin/zsh
 
-: "${CLAUDE_CONFIG_DIR:=$HOME/.cloai}"
+: "${CLAUDE_CONFIG_DIR:=$HOME/.acode}"
 export CLAUDE_CONFIG_DIR
 export NODE_TLS_REJECT_UNAUTHORIZED=0
 export DISABLE_INSTALLATION_CHECKS=true
@@ -42,38 +42,38 @@ unset CLAUDE_CODE_USE_BEDROCK
 unset CLAUDE_CODE_USE_VERTEX
 unset CLAUDE_CODE_USE_FOUNDRY
 
-exec "$HOME/.bun/bin/bun" "$HOME/.bun/install/global/node_modules/@cloai-code/cli/src/bootstrap-entry.ts" -- --settings "$HOME/.cloai/launch-settings.json" "$@"
+exec "$HOME/.bun/bin/bun" "$HOME/.bun/install/global/node_modules/@acode/cli/src/bootstrap-entry.ts" --settings "$HOME/.acode/launch-settings.json" "$@"
 ```
 
 赋权：
 
 ```bash
-chmod +x ~/.local/bin/cloai
+chmod +x ~/.local/bin/acode
 ```
 
 ## 解决 Bun PATH 抢命中
 
-很多终端会优先命中 `~/.bun/bin/cloai`。如果这里还是旧链接，就会绕过上面的包装脚本。
+很多终端会优先命中 `~/.bun/bin/acode`。如果这里还是旧链接，就会绕过上面的包装脚本。
 
 建议直接统一到同一个入口：
 
 ```bash
-rm -f ~/.bun/bin/cloai
-ln -s ~/.local/bin/cloai ~/.bun/bin/cloai
+rm -f ~/.bun/bin/acode
+ln -s ~/.local/bin/acode ~/.bun/bin/acode
 ```
 
 验证：
 
 ```bash
-type -a cloai
-which -a cloai
+type -a acode
+which -a acode
 ```
 
-你应该能看到 `~/.local/bin/cloai` 和 `~/.bun/bin/cloai` 指向同一套入口。
+你应该能看到 `~/.local/bin/acode` 和 `~/.bun/bin/acode` 指向同一套入口。
 
 ## 独立运行配置
 
-创建 `~/.cloai/launch-settings.json`：
+创建 `~/.acode/launch-settings.json`：
 
 ```json
 {
@@ -120,7 +120,7 @@ codex login
 然后启动：
 
 ```bash
-cloai
+acode
 ```
 
 进入后执行：
@@ -131,9 +131,9 @@ cloai
 
 这会从 `~/.codex/auth.json` 导入 OpenAI OAuth 信息。
 
-### 方式二：在 cloai 内单独登录
+### 方式二：在 acode 内单独登录
 
-如果没有 `codex`，直接在 `cloai` 里走 OpenAI 登录流程即可。
+如果没有 `codex`，直接在 `acode` 里走 OpenAI 登录流程即可。
 
 ## 验证是否生效
 
@@ -141,7 +141,7 @@ cloai
 
 ```bash
 cd ~
-cloai
+acode
 ```
 
 正常情况下你会看到：
@@ -166,9 +166,9 @@ OK
 
 这套方案默认不会影响你原来的 `claude`：
 
-- `cloai` 走 `~/.cloai`
+- `acode` 走 `~/.acode`
 - 原版 `claude` 仍可继续用 `~/.claude`
-- 包装脚本只对 `cloai` 生效
+- 包装脚本只对 `acode` 生效
 
 如果你同时保留企业 AWS Bedrock 版 `claude`，两边可以并存。
 
@@ -176,20 +176,20 @@ OK
 
 ### 1. 还是进了 AWS 登录页
 
-大概率是终端实际跑到的不是包装后的 `cloai`。
+大概率是终端实际跑到的不是包装后的 `acode`。
 
 检查：
 
 ```bash
-type -a cloai
-which -a cloai
+type -a acode
+which -a acode
 ```
 
 ### 2. 还是报证书错误
 
 检查当前进程是不是通过包装脚本启动。
 
-如果不是，通常就是 `~/.bun/bin/cloai` 还没改成指向 `~/.local/bin/cloai`。
+如果不是，通常就是 `~/.bun/bin/acode` 还没改成指向 `~/.local/bin/acode`。
 
 ### 3. 首页显示是 `gpt-5.4`，但请求还是失败
 
@@ -198,7 +198,7 @@ which -a cloai
 ## 推荐验证命令
 
 ```bash
-type -a cloai
-which -a cloai
-cloai --version
+type -a acode
+which -a acode
+acode --version
 ```

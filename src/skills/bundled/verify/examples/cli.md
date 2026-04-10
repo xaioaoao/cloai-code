@@ -25,6 +25,6 @@ bun run dev --help
 
 ## Good Result Summary
 
-- `Verified: bun run version printed the restored Claude Code version.`
+- `Verified: bun run version printed the restored acode version.`
 - `Verified: bun run dev --help showed the full CLI command tree.`
 - `Risk: interactive raw-mode flows were not exercised in a non-TTY shell.`
